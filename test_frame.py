@@ -321,14 +321,22 @@ def main():
         print(f"[test] Alpha after GM: min={float(alpha2.min()):.4f}  "
               f"max={float(alpha2.max()):.4f}  mean={float(alpha2.mean()):.4f}")
 
-    # Write outputs
+    # Unpack premult result into constituent outputs
+    alpha_out    = result[:, :, 3:4]
+    key_out      = result                                      # premult RGBA — comp-ready
+    # Straight FG: unpremultiply RGB, embed alpha.
+    # eps guards transparent regions against divide-by-zero.
+    eps          = 1e-6
+    rgb_straight = result[:, :, :3] / (alpha_out + eps)
+    fg_out       = np.concatenate([rgb_straight, alpha_out], axis=-1)
+
     print(f"[test] Writing to {out_dir} …")
-    _write_exr(out_dir / f"{stem}_alpha.exr",  result[:, :, 3:4])
-    _write_exr(out_dir / f"{stem}_fg.exr",     result)
-    _write_exr(out_dir / f"{stem}_key.exr",    result)
-    print(f"  {stem}_alpha.exr")
-    print(f"  {stem}_fg.exr")
-    print(f"  {stem}_key.exr")
+    _write_exr(out_dir / f"{stem}_alpha.exr",  alpha_out)
+    _write_exr(out_dir / f"{stem}_fg.exr",     fg_out)
+    _write_exr(out_dir / f"{stem}_key.exr",    key_out)
+    print(f"  {stem}_alpha.exr  (single channel)")
+    print(f"  {stem}_fg.exr     (straight RGBA — unpremultiplied RGB + alpha)")
+    print(f"  {stem}_key.exr    (premult RGBA — comp-ready)")
 
     if args.preview:
         _write_preview(out_dir / f"{stem}_preview.png", result)
