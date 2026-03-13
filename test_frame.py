@@ -1,92 +1,96 @@
 """
 test_frame.py — single-frame inference test for corridorkey-mlx
 
+Matches the reference CorridorKeyEngine pipeline exactly:
+  1. Read linear EXR
+  2. Resize to 2048px (model's native size) in linear space
+  3. linear → sRGB
+  4. ImageNet normalise  (mean=[0.485,0.456,0.406] std=[0.229,0.224,0.225])
+  5. Concatenate mask channel  [H,W,4]
+  6. Single forward pass (no tiling — model has global context at 2048px)
+  7. Lanczos upsample alpha + fg back to native resolution
+  8. Despill green from fg (sRGB)
+  9. Optional despeckle (clean small disconnected components)
+ 10. linear_to_srgb → premultiply → pack RGBA EXR
+ 11. Apply garbage matte post-inference (dilate + multiply)
+
 Usage
 -----
-# Maskless (trimap = 0.5 everywhere)
 python test_frame.py /path/to/frame.exr
-
-# With trimap
-python test_frame.py /path/to/frame.exr --trimap /path/to/trimap.exr
-
-# Control tile size (default 1024 — good up to ~6K with overlap)
-python test_frame.py /path/to/frame.exr --tile 512
-
-# Save a composite-over-black preview alongside the key
-python test_frame.py /path/to/frame.exr --preview
-
-Supports: EXR (linear), TIFF (16/32-bit), PNG/JPG (auto gamma-decoded to linear)
-Outputs:  <stem>_alpha.exr, <stem>_fg.exr, <stem>_key.exr (premult RGBA)
-          <stem>_preview.png  (if --preview)
+python test_frame.py /path/to/frame.exr --garbage-matte /path/to/matte.exr
+python test_frame.py /path/to/frame.exr --garbage-matte /path/to/matte.exr --preview
 """
 from __future__ import annotations
-import argparse, math, time
+import argparse, time
 from pathlib import Path
 import numpy as np
 import mlx.core as mx
 
+# ImageNet stats (model trained with these)
+_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 1, 3)
+_STD  = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 1, 3)
+MODEL_SIZE = 2048  # model's native inference resolution
+
 # ---------------------------------------------------------------------------
-# I/O helpers — EXR, TIFF, PNG/JPG
+# Color helpers
 # ---------------------------------------------------------------------------
 
-def _read_image(path: Path) -> np.ndarray:
-    """
-    Returns float32 [H, W, 3] RGB in linear light, range 0-1 (clamped for display,
-    unclamped for HDR EXR so the model sees full linear values).
-    """
-    ext = path.suffix.lower()
-    if ext == '.exr':
-        import OpenEXR, Imath
-        f = OpenEXR.InputFile(str(path))
-        dw = f.header()['dataWindow']
-        W = dw.max.x - dw.min.x + 1
-        H = dw.max.y - dw.min.y + 1
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
-        channels = f.header().get('channels', {})
-        def _chan(name):
-            if name in channels:
-                return np.frombuffer(f.channel(name, pt), dtype=np.float32).reshape(H, W)
-            return np.zeros((H, W), dtype=np.float32)
-        R, G, B = _chan('R'), _chan('G'), _chan('B')
-        return np.stack([R, G, B], axis=-1)
+def _linear_to_srgb(x: np.ndarray) -> np.ndarray:
+    """Linear → sRGB.  Clips to [0,1] first — HDR highlights become white,
+    which is correct for feeding a keyer network (screens are always < 1.0)."""
+    x = np.clip(x, 0.0, 1.0)
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1.0 / 2.4) - 0.055)
 
-    elif ext in ('.tif', '.tiff'):
-        import cv2
-        img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH | cv2.IMREAD_COLOR)
-        if img is None:
-            raise IOError(f"cv2 could not read {path}")
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32)
-        # Normalise 16-bit to 0-1
-        if img.max() > 1.0:
-            img /= 65535.0 if img.max() <= 65535.0 else img.max()
-        return img
+def _srgb_to_linear(x: np.ndarray) -> np.ndarray:
+    x = np.clip(x, 0.0, None)
+    return np.where(x <= 0.04045, x / 12.92, np.power((x + 0.055) / 1.055, 2.4))
 
-    else:  # PNG / JPG — sRGB, decode gamma
-        from PIL import Image
-        img = np.array(Image.open(str(path)).convert('RGB')).astype(np.float32) / 255.0
-        # sRGB → linear
-        img = np.where(img <= 0.04045, img / 12.92, ((img + 0.055) / 1.055) ** 2.4)
-        return img
+def _despill(rgb: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """Green despill — luminance-preserving average method. rgb: [H,W,3] sRGB 0-1."""
+    if strength <= 0.0:
+        return rgb
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    limit      = (r + b) / 2.0
+    spill      = np.maximum(g - limit, 0.0)
+    g_new      = g - spill
+    r_new      = r + spill * 0.5
+    b_new      = b + spill * 0.5
+    despilled  = np.stack([r_new, g_new, b_new], axis=-1)
+    return rgb * (1.0 - strength) + despilled * strength if strength < 1.0 else despilled
 
 
-def _read_trimap(path: Path, H: int, W: int) -> np.ndarray:
-    """Returns float32 [H, W, 1], values 0-1."""
-    ext = path.suffix.lower()
-    if ext == '.exr':
-        import OpenEXR, Imath
-        f = OpenEXR.InputFile(str(path))
-        dw = f.header()['dataWindow']
-        tW = dw.max.x - dw.min.x + 1
-        tH = dw.max.y - dw.min.y + 1
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
-        ch = f.header().get('channels', {})
-        name = 'A' if 'A' in ch else ('R' if 'R' in ch else next(iter(ch)))
-        arr = np.frombuffer(f.channel(name, pt), dtype=np.float32).reshape(tH, tW)
-    else:
-        from PIL import Image
-        arr = np.array(Image.open(str(path)).convert('L')).astype(np.float32) / 255.0
-    if arr.shape[:2] != (H, W):
-        import cv2
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def _read_exr_rgb(path: Path) -> np.ndarray:
+    """Returns float32 [H, W, 3] linear RGB."""
+    import OpenEXR, Imath
+    f  = OpenEXR.InputFile(str(path))
+    dw = f.header()['dataWindow']
+    W  = dw.max.x - dw.min.x + 1
+    H  = dw.max.y - dw.min.y + 1
+    pt = Imath.PixelType(Imath.PixelType.FLOAT)
+    ch = f.header().get('channels', {})
+    def _c(name):
+        if name in ch:
+            return np.frombuffer(f.channel(name, pt), dtype=np.float32).reshape(H, W)
+        return np.zeros((H, W), dtype=np.float32)
+    return np.stack([_c('R'), _c('G'), _c('B')], axis=-1)
+
+
+def _read_exr_mask(path: Path, H: int, W: int) -> np.ndarray:
+    """Returns float32 [H, W, 1] mask, resized to (H, W) if needed."""
+    import cv2, OpenEXR, Imath
+    f  = OpenEXR.InputFile(str(path))
+    dw = f.header()['dataWindow']
+    mW = dw.max.x - dw.min.x + 1
+    mH = dw.max.y - dw.min.y + 1
+    pt = Imath.PixelType(Imath.PixelType.FLOAT)
+    ch = f.header().get('channels', {})
+    name = 'A' if 'A' in ch else ('R' if 'R' in ch else next(iter(ch)))
+    arr  = np.frombuffer(f.channel(name, pt), dtype=np.float32).reshape(mH, mW)
+    if arr.shape != (H, W):
         arr = cv2.resize(arr, (W, H), interpolation=cv2.INTER_LINEAR)
     return arr[:, :, None]
 
@@ -95,148 +99,127 @@ def _write_exr(path: Path, data: np.ndarray) -> None:
     """data: float32 [H, W, C] where C is 1, 3, or 4."""
     import OpenEXR, Imath
     H, W, C = data.shape
-    header = OpenEXR.Header(W, H)
-    names = {1: ['Y'], 3: ['R','G','B'], 4: ['R','G','B','A']}[C]
+    names   = {1: ['Y'], 3: ['R','G','B'], 4: ['R','G','B','A']}[C]
+    header  = OpenEXR.Header(W, H)
     header['channels'] = {n: Imath.Channel(Imath.PixelType(Imath.PixelType.FLOAT)) for n in names}
     f = OpenEXR.OutputFile(str(path), header)
-    f.writePixels({n: data[:,:,i].tobytes() for i, n in enumerate(names)})
+    f.writePixels({n: data[:, :, i].tobytes() for i, n in enumerate(names)})
     f.close()
 
 
-def _write_preview(path: Path, rgba_linear: np.ndarray) -> None:
-    """Composite premult RGBA over black, tonemap, save PNG."""
+def _write_preview(path: Path, rgba_premul_linear: np.ndarray) -> None:
+    """Comp premult RGBA over black, sRGB encode, save PNG."""
     from PIL import Image
-    rgb = rgba_linear[:, :, :3]  # premult — already composited over black
-    # Clamp and linear → sRGB
-    rgb = np.clip(rgb, 0, 1)
-    rgb = np.where(rgb <= 0.0031308, rgb * 12.92, 1.055 * rgb**(1/2.4) - 0.055)
-    rgb8 = (rgb * 255).clip(0, 255).astype(np.uint8)
+    rgb  = np.clip(rgba_premul_linear[:, :, :3], 0, 1)
+    rgb8 = (_linear_to_srgb(rgb) * 255).clip(0, 255).astype(np.uint8)
     Image.fromarray(rgb8).save(str(path))
-    print(f"  Preview saved: {path.name}")
+    print(f"  Preview: {path.name}")
 
+# ---------------------------------------------------------------------------
+# Inference  (matches reference engine exactly)
+# ---------------------------------------------------------------------------
 
-def _apply_garbage_matte(result: np.ndarray, matte_path: Path,
-                          H: int, W: int, dilation: int = 15) -> np.ndarray:
+def infer_frame(
+    model,
+    rgb_linear: np.ndarray,          # [H, W, 3] linear, 0-1+
+    mask_linear: np.ndarray | None,  # [H, W, 1] linear, 0-1  — or None
+    despill_strength: float = 1.0,
+    despeckle: bool = True,
+    despeckle_size: int = 400,
+) -> np.ndarray:
     """
-    Load garbage matte, dilate, multiply against alpha channel of result.
-    result: premult RGBA [H, W, 4]
-    Returns same shape with alpha (and premult RGB) masked.
+    Full reference pipeline. Returns premult RGBA [H, W, 4] linear float32.
+
+    Steps mirror CorridorKeyEngine.process_frame(input_is_linear=True):
+      resize-in-linear → linear_to_srgb → ImageNet-norm → inference
+      → Lanczos-upsample → despeckle → despill(sRGB) → srgb_to_linear → premultiply
     """
     import cv2
-    # Load matte as single channel 0-1
-    ext = matte_path.suffix.lower()
-    if ext == '.exr':
-        import OpenEXR, Imath
-        f = OpenEXR.InputFile(str(matte_path))
-        dw = f.header()['dataWindow']
-        mW = dw.max.x - dw.min.x + 1
-        mH = dw.max.y - dw.min.y + 1
-        pt = Imath.PixelType(Imath.PixelType.FLOAT)
-        ch = f.header().get('channels', {})
-        name = 'A' if 'A' in ch else ('R' if 'R' in ch else next(iter(ch)))
-        arr = np.frombuffer(f.channel(name, pt), dtype=np.float32).reshape(mH, mW)
-    else:
-        from PIL import Image
-        arr = np.array(Image.open(str(matte_path)).convert('L')).astype(np.float32) / 255.0
+    H, W = rgb_linear.shape[:2]
 
-    # Resize to frame dims if needed
-    if arr.shape[:2] != (H, W):
-        arr = cv2.resize(arr, (W, H), interpolation=cv2.INTER_LINEAR)
+    if mask_linear is None:
+        mask_linear = np.full((H, W, 1), 0.5, dtype=np.float32)
 
-    # Dilate to be safe (avoids hard garbage matte edge cutting into subject)
-    if dilation > 0:
-        ksize = int(dilation * 2 + 1)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
-        arr = cv2.dilate(arr, kernel)
+    # --- 1. Resize to model native size in linear space ---
+    img_2k   = cv2.resize(rgb_linear,           (MODEL_SIZE, MODEL_SIZE), interpolation=cv2.INTER_LINEAR)
+    mask_2k  = cv2.resize(mask_linear[:, :, 0], (MODEL_SIZE, MODEL_SIZE), interpolation=cv2.INTER_LINEAR)
+    mask_2k  = np.clip(mask_2k, 0.0, 1.0)[:, :, None]
 
-    mask = arr[:, :, None]  # [H, W, 1]
+    # --- 2. linear → sRGB  (model trained on sRGB) ---
+    img_srgb = _linear_to_srgb(img_2k)
 
-    # Multiply alpha and premult RGB by mask
-    out = result.copy()
-    out[:, :, :3] *= mask   # premult RGB
-    out[:, :, 3:4] *= mask  # alpha
-    return out
+    # --- 3. ImageNet normalise ---
+    img_norm = (img_srgb - _MEAN) / _STD
 
+    # --- 4. Concatenate mask channel and run model ---
+    inp = np.concatenate([img_norm, mask_2k], axis=-1).astype(np.float32)
+    x   = mx.array(inp[None])   # [1, 2048, 2048, 4]
 
-# ---------------------------------------------------------------------------
-# Tiled inference
-# ---------------------------------------------------------------------------
-
-def _infer_tile(model, tile_rgba: np.ndarray) -> np.ndarray:
-    """tile_rgba: float32 [H, W, 4] → premult RGBA float32 [H, W, 4]."""
-    x = mx.array(tile_rgba[None])       # [1, H, W, 4]
+    t0  = time.time()
     out = model(x)
     mx.eval(out['alpha'], out['fg'])
-    alpha = np.array(out['alpha'][0])   # [H, W, 1]
-    fg    = np.array(out['fg'][0])      # [H, W, 3]
-    return np.concatenate([fg * alpha, alpha], axis=-1)
+    print(f"[infer] Forward pass: {time.time()-t0:.2f}s")
+
+    pred_alpha = np.array(out['alpha'][0])   # [2048, 2048, 1]  (0-1)
+    pred_fg    = np.array(out['fg'][0])      # [2048, 2048, 3]  (sRGB 0-1)
+
+    # --- 5. Lanczos upsample back to native resolution ---
+    if (H, W) != (MODEL_SIZE, MODEL_SIZE):
+        pred_alpha = cv2.resize(pred_alpha[:, :, 0], (W, H), interpolation=cv2.INTER_LANCZOS4)[:, :, None]
+        pred_fg    = cv2.resize(pred_fg,             (W, H), interpolation=cv2.INTER_LANCZOS4)
+    pred_alpha = np.clip(pred_alpha, 0.0, 1.0).astype(np.float32)
+    pred_fg    = np.clip(pred_fg,    0.0, 1.0).astype(np.float32)
+
+    # --- 6. Despeckle alpha (clean small disconnected islands) ---
+    if despeckle:
+        pred_alpha = _clean_matte(pred_alpha, area_threshold=despeckle_size)
+
+    # --- 7. Despill FG (sRGB space, before linear conversion) ---
+    pred_fg = _despill(pred_fg, strength=despill_strength)
+
+    # --- 8. sRGB → linear, then premultiply ---
+    fg_lin    = _srgb_to_linear(pred_fg)
+    fg_premul = fg_lin * pred_alpha
+
+    return np.concatenate([fg_premul, pred_alpha], axis=-1)  # [H, W, 4]
 
 
-def _pad32(x: np.ndarray):
-    """Pad H, W to next multiple of 32. Returns (padded, pH, pW)."""
-    H, W = x.shape[:2]
-    pH = (32 - H % 32) % 32
-    pW = (32 - W % 32) % 32
-    return np.pad(x, ((0, pH), (0, pW), (0, 0)), mode='reflect'), pH, pW
+def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
+                 dilation: int = 25, blur_size: int = 5) -> np.ndarray:
+    """Remove small disconnected islands from predicted matte."""
+    import cv2
+    squeeze = alpha.ndim == 3
+    if squeeze:
+        alpha = alpha[:, :, 0]
+    mask8   = (alpha > 0.5).astype(np.uint8) * 255
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(mask8, connectivity=8)
+    cleaned = np.zeros_like(mask8)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] >= area_threshold:
+            cleaned[labels == i] = 255
+    if dilation > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation*2+1, dilation*2+1))
+        cleaned = cv2.dilate(cleaned, k)
+    if blur_size > 0:
+        b = blur_size * 2 + 1
+        cleaned = cv2.GaussianBlur(cleaned, (b, b), 0)
+    result = alpha * (cleaned.astype(np.float32) / 255.0)
+    return result[:, :, None] if squeeze else result
 
 
-def infer_frame(model, rgb: np.ndarray, trimap: np.ndarray | None,
-                tile_size: int = 1024, overlap: int = 128) -> np.ndarray:
-    """
-    Full-resolution tiled inference.
-    rgb:    [H, W, 3] float32 linear
-    trimap: [H, W, 1] float32 0-1, or None
-    Returns premult RGBA [H, W, 4] float32.
-    """
-    H, W = rgb.shape[:2]
-    if trimap is None:
-        trimap = np.full((H, W, 1), 0.5, dtype=np.float32)
-
-    rgba_in = np.concatenate([rgb, trimap], axis=-1)  # [H, W, 4]
-
-    # Fast path: fits in one tile
-    if H <= tile_size and W <= tile_size:
-        padded, pH, pW = _pad32(rgba_in)
-        result = _infer_tile(model, padded)
-        return result[:H, :W]
-
-    # Tiled path with Hanning-window blending
-    output  = np.zeros((H, W, 4), dtype=np.float64)
-    weights = np.zeros((H, W, 1), dtype=np.float64)
-    step    = tile_size - overlap
-
-    ys = list(range(0, max(1, H - tile_size + 1), step))
-    xs = list(range(0, max(1, W - tile_size + 1), step))
-    if not ys or ys[-1] + tile_size < H:
-        ys.append(max(0, H - tile_size))
-    if not xs or xs[-1] + tile_size < W:
-        xs.append(max(0, W - tile_size))
-    ys = sorted(set(ys)); xs = sorted(set(xs))
-
-    win_1d_y = np.hanning(tile_size).reshape(-1, 1).astype(np.float64)
-    win_1d_x = np.hanning(tile_size).reshape(1, -1).astype(np.float64)
-    win = (win_1d_y * win_1d_x)[:, :, None]  # [T, T, 1]
-
-    total = len(ys) * len(xs)
-    done  = 0
-    for y in ys:
-        y2 = min(y + tile_size, H)
-        y1 = max(0, y2 - tile_size)
-        for x in xs:
-            x2 = min(x + tile_size, W)
-            x1 = max(0, x2 - tile_size)
-            tile = rgba_in[y1:y2, x1:x2]
-            th, tw = tile.shape[:2]
-            padded, pH, pW = _pad32(tile)
-            result = _infer_tile(model, padded)[:th, :tw]
-            w = win[:th, :tw]
-            output [y1:y2, x1:x2] += result * w
-            weights[y1:y2, x1:x2] += w
-            done += 1
-            print(f"  Tile {done}/{total} ({y1},{x1})→({y2},{x2})", end='\r', flush=True)
-
-    print()
-    return (output / np.maximum(weights, 1e-8)).astype(np.float32)
+def _apply_garbage_matte(result: np.ndarray, matte: np.ndarray,
+                          dilation_px: int = 15) -> np.ndarray:
+    """Dilate matte and multiply against premult RGBA result."""
+    import cv2
+    mask = matte[:, :, 0]
+    if dilation_px > 0:
+        k    = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_px*2+1, dilation_px*2+1))
+        mask = cv2.dilate(mask, k)
+    mask = mask[:, :, None]
+    out  = result.copy()
+    out[:, :, :3] *= mask
+    out[:, :, 3:4] *= mask
+    return out
 
 # ---------------------------------------------------------------------------
 # Main
@@ -244,26 +227,25 @@ def infer_frame(model, rgb: np.ndarray, trimap: np.ndarray | None,
 
 def main():
     ap = argparse.ArgumentParser(description='CorridorKey MLX single-frame test')
-    ap.add_argument('frame',             type=Path,            help='Input frame (EXR/TIFF/PNG/JPG)')
-    ap.add_argument('--trimap',         type=Path, default=None, help='Optional trimap')
-    ap.add_argument('--garbage-matte',  type=Path, default=None, help='Garbage matte EXR/PNG')
-    ap.add_argument('--gm-dilation',    type=int,  default=15,   help='Garbage matte dilation px (default 15)')
-    ap.add_argument('--model',           type=Path,
-                    default=Path('/Users/cnoellert/ComfyUI/models/corridorkey/CorridorKey_v1.0.pth'),
-                    help='.pth or .mlx.npz checkpoint')
-    ap.add_argument('--tile',            type=int,  default=1024,  help='Tile size (default 1024)')
-    ap.add_argument('--overlap',         type=int,  default=128,   help='Tile overlap px (default 128)')
-    ap.add_argument('--out-dir',         type=Path, default=None,  help='Output dir (default: alongside input)')
-    ap.add_argument('--preview',         action='store_true',      help='Save PNG composite-over-black preview')
-    ap.add_argument('--quantize',        choices=['int8'], default=None)
+    ap.add_argument('frame',                 type=Path)
+    ap.add_argument('--garbage-matte',       type=Path,  default=None)
+    ap.add_argument('--gm-dilation',         type=int,   default=15)
+    ap.add_argument('--despill-strength',    type=float, default=1.0)
+    ap.add_argument('--no-despeckle',        action='store_true')
+    ap.add_argument('--despeckle-size',      type=int,   default=400)
+    ap.add_argument('--model',               type=Path,
+                    default=Path('/Users/cnoellert/ComfyUI/models/corridorkey/CorridorKey_v1.0.pth'))
+    ap.add_argument('--out-dir',             type=Path,  default=None)
+    ap.add_argument('--preview',             action='store_true')
+    ap.add_argument('--quantize',            choices=['int8'], default=None)
     args = ap.parse_args()
 
     frame_path = args.frame.expanduser().resolve()
     out_dir    = (args.out_dir or frame_path.parent).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    stem       = frame_path.stem
+    stem = frame_path.stem
 
-    # ---- Auto-convert weights (Option C) -----------------------------------
+    # Auto-convert weights
     model_path = args.model.expanduser().resolve()
     if model_path.suffix != '.npz':
         from inference import _ensure_converted
@@ -271,9 +253,9 @@ def main():
     else:
         npz_path = model_path
 
-    # ---- Load model --------------------------------------------------------
+    # Load model
     from model import GreenFormer
-    print(f"[test] Building GreenFormer …")
+    print("[test] Building GreenFormer …")
     gf = GreenFormer()
     weights = {k: v for k, v in dict(mx.load(str(npz_path))).items()
                if not k.startswith('__')}
@@ -282,52 +264,54 @@ def main():
     gf.eval()
     print(f"[test] Weights loaded ({len(weights)} tensors)")
 
-    # ---- Read input --------------------------------------------------------
+    # Read frame
     print(f"[test] Reading {frame_path.name} …")
-    rgb = _read_image(frame_path)
-    H, W = rgb.shape[:2]
-    print(f"[test] Frame: {W}×{H}")
+    rgb_linear = _read_exr_rgb(frame_path)
+    H, W = rgb_linear.shape[:2]
+    print(f"[test] Frame: {W}×{H}  (will process at {MODEL_SIZE}px, upsample back)")
 
-    trimap = None
-    if args.trimap:
-        trimap = _read_trimap(args.trimap.expanduser().resolve(), H, W)
-        print(f"[test] Trimap loaded")
-    else:
-        print(f"[test] No trimap — using maskless (all 0.5)")
-
-    # ---- Inference ---------------------------------------------------------
-    print(f"[test] Inferring at tile={args.tile} overlap={args.overlap} …")
-    t0 = time.time()
-    result = infer_frame(gf, rgb, trimap, tile_size=args.tile, overlap=args.overlap)
-    elapsed = time.time() - t0
-    print(f"[test] Done: {elapsed:.2f}s")
-
-    alpha = result[:, :, 3:4]
-    fg    = result[:, :, :3]  # premult FG
-
-    # Apply garbage matte (post-inference, dilated)
+    # Read garbage matte
+    mask = None
     if args.garbage_matte:
         gm_path = args.garbage_matte.expanduser().resolve()
-        print(f"[test] Applying garbage matte: {gm_path.name} (dilation={args.gm_dilation}px)")
-        result = _apply_garbage_matte(result, gm_path, H, W, dilation=args.gm_dilation)
+        mask = _read_exr_mask(gm_path, H, W)
+        print(f"[test] Mask loaded: {gm_path.name}")
+    else:
+        print("[test] No mask — using all-0.5 trimap")
 
-    # Stats
+    # Inference
+    print(f"[test] Inferring …")
+    t0     = time.time()
+    result = infer_frame(
+        gf, rgb_linear, mask,
+        despill_strength=args.despill_strength,
+        despeckle=not args.no_despeckle,
+        despeckle_size=args.despeckle_size,
+    )
+    elapsed = time.time() - t0
+
+    alpha = result[:, :, 3:4]
+    print(f"[test] Total: {elapsed:.2f}s")
     print(f"[test] Alpha: min={float(alpha.min()):.4f}  max={float(alpha.max()):.4f}  "
           f"mean={float(alpha.mean()):.4f}")
 
-    # ---- Write outputs -----------------------------------------------------
-    alpha_path   = out_dir / f"{stem}_alpha.exr"
-    fg_path      = out_dir / f"{stem}_fg.exr"
-    key_path     = out_dir / f"{stem}_key.exr"
+    # Apply garbage matte post-inference
+    if args.garbage_matte:
+        print(f"[test] Applying garbage matte (dilation={args.gm_dilation}px) …")
+        gm = _read_exr_mask(args.garbage_matte.expanduser().resolve(), H, W)
+        result = _apply_garbage_matte(result, gm, dilation_px=args.gm_dilation)
+        alpha2 = result[:, :, 3:4]
+        print(f"[test] Alpha after GM: min={float(alpha2.min()):.4f}  "
+              f"max={float(alpha2.max()):.4f}  mean={float(alpha2.mean()):.4f}")
 
-    print(f"[test] Writing outputs to {out_dir} …")
-    _write_exr(alpha_path, alpha)
-    _write_exr(fg_path,    np.concatenate([fg, alpha], axis=-1))
-    _write_exr(key_path,   result)
-
-    print(f"  {alpha_path.name}")
-    print(f"  {fg_path.name}")
-    print(f"  {key_path.name}")
+    # Write outputs
+    print(f"[test] Writing to {out_dir} …")
+    _write_exr(out_dir / f"{stem}_alpha.exr",  result[:, :, 3:4])
+    _write_exr(out_dir / f"{stem}_fg.exr",     result)
+    _write_exr(out_dir / f"{stem}_key.exr",    result)
+    print(f"  {stem}_alpha.exr")
+    print(f"  {stem}_fg.exr")
+    print(f"  {stem}_key.exr")
 
     if args.preview:
         _write_preview(out_dir / f"{stem}_preview.png", result)
