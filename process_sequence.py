@@ -137,6 +137,7 @@ def _process_frame(
     despeckle: bool = True,
     despeckle_size: int = 400,
     gm_dilation: int = 15,
+    trimap_radius: int = 40,
 ) -> dict:
     """
     Process one frame. Returns timing + alpha stats dict.
@@ -164,6 +165,7 @@ def _process_frame(
         despill_strength=despill_strength,
         despeckle=despeckle,
         despeckle_size=despeckle_size,
+        trimap_radius=trimap_radius,
     )
 
     # Apply garbage matte post-inference
@@ -226,6 +228,8 @@ def main():
     ap.add_argument('--model',              type=Path,
                     default=Path('/Users/cnoellert/ComfyUI/models/corridorkey/CorridorKey_v1.0.pth'))
     ap.add_argument('--despill-strength',   type=float, default=1.0)
+    ap.add_argument('--trimap-radius',  type=int,   default=40,
+                    help='Erode+dilate radius in native px (0=disable, default 40)')
     ap.add_argument('--no-despeckle',       action='store_true')
     ap.add_argument('--despeckle-size',     type=int,   default=400)
     ap.add_argument('--gm-dilation',        type=int,   default=15)
@@ -309,6 +313,7 @@ def main():
                 despeckle=not args.no_despeckle,
                 despeckle_size=args.despeckle_size,
                 gm_dilation=args.gm_dilation,
+                trimap_radius=args.trimap_radius,
             )
             elapsed   = stats['elapsed']
             remaining = (len(frames) - idx) * elapsed

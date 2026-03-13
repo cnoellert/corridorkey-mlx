@@ -156,6 +156,7 @@ def infer_frame(
     despill_strength: float = 1.0,
     despeckle: bool = True,
     despeckle_size: int = 400,
+    trimap_radius: int = 40,         # erode+dilate radius in native pixels
 ) -> np.ndarray:
     """
     Full reference pipeline. Returns premult RGBA [H, W, 4] linear float32.
@@ -173,7 +174,13 @@ def infer_frame(
     H, W = rgb_linear.shape[:2]
 
     if mask_linear is None:
+        # No mask: treat everything as uncertain
         mask_linear = np.full((H, W, 1), 0.5, dtype=np.float32)
+    elif trimap_radius > 0:
+        # Convert mask to proper trimap: erode→FG, dilate→BG, band→uncertain
+        # Do this at native resolution so edge geometry is preserved before
+        # the 2048px downsample.
+        mask_linear = _make_trimap(mask_linear, erode_r=trimap_radius, dilate_r=trimap_radius)
 
     # --- 1. Resize to model native size in linear space ---
     img_2k   = cv2.resize(rgb_linear,           (MODEL_SIZE, MODEL_SIZE), interpolation=cv2.INTER_LINEAR)
@@ -245,6 +252,32 @@ def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
     return result[:, :, None] if squeeze else result
 
 
+def _make_trimap(mask: np.ndarray, erode_r: int = 40, dilate_r: int = 40) -> np.ndarray:
+    """
+    Convert a binary or soft mask into a proper trimap:
+        1.0 = definite foreground  (eroded core)
+        0.0 = definite background  (outside dilated edge)
+        0.5 = uncertain            (narrow band between erode and dilate)
+
+    erode_r / dilate_r are in native image pixels.
+    Default 40px at 6K gives ~14px uncertain band at 2048px model resolution.
+
+    This dramatically stabilises temporal consistency: the model receives the
+    same clear FG/BG/unknown map every frame, only refining the edge band.
+    """
+    import cv2
+    squeeze = mask.ndim == 3
+    if squeeze:
+        mask = mask[:, :, 0]
+    mask8  = (mask > 0.5).astype(np.uint8) * 255
+    ke     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_r*2+1,  erode_r*2+1))
+    kd     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_r*2+1, dilate_r*2+1))
+    fg     = cv2.erode(mask8,  ke).astype(np.float32) / 255.0   # definite FG
+    bg_inv = cv2.dilate(mask8, kd).astype(np.float32) / 255.0   # dilated → outside is BG
+    trimap = np.where(fg > 0.5, 1.0, np.where(bg_inv < 0.5, 0.0, 0.5)).astype(np.float32)
+    return trimap[:, :, None] if squeeze else trimap
+
+
 def _apply_garbage_matte(result: np.ndarray, matte: np.ndarray,
                           dilation_px: int = 15) -> np.ndarray:
     """Dilate matte and multiply against premult RGBA result."""
@@ -269,6 +302,8 @@ def main():
     ap.add_argument('--garbage-matte',       type=Path,  default=None)
     ap.add_argument('--gm-dilation',         type=int,   default=15)
     ap.add_argument('--despill-strength',    type=float, default=1.0)
+    ap.add_argument('--trimap-radius',     type=int,   default=40,
+                    help='Erode+dilate radius in native px for trimap construction (0=disable, default 40)')
     ap.add_argument('--no-despeckle',        action='store_true')
     ap.add_argument('--despeckle-size',      type=int,   default=400)
     ap.add_argument('--model',               type=Path,
@@ -335,6 +370,7 @@ def main():
         despill_strength=args.despill_strength,
         despeckle=not args.no_despeckle,
         despeckle_size=args.despeckle_size,
+        trimap_radius=args.trimap_radius,
     )
     elapsed = time.time() - t0
 
