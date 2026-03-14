@@ -449,7 +449,7 @@ def main():
     print(f"  {_outpath('key').name}    (premult RGBA — comp-ready)")
 
     if args.preview:
-        _write_preview(out_dir / f"{stem}_preview.png", result, input_is_srgb=False)  # output always linear
+        _write_preview(out_dir / f"{stem}_preview.png", result, input_is_srgb=True)   # key is sRGB premult
 
     print("[test] Complete.")
 
