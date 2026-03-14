@@ -173,7 +173,7 @@ def infer_frame(
     import cv2
     H, W = rgb_linear.shape[:2]
 
-    trimap_full = None   # returned to caller for hard-constraint enforcement
+    trimap_full = None   # tight trimap returned to caller for hard-constraint enforcement
 
     # --- 1. Resize to model native size in linear space ---
     img_2k  = cv2.resize(rgb_linear,           (MODEL_SIZE, MODEL_SIZE), interpolation=cv2.INTER_LINEAR)
@@ -184,12 +184,21 @@ def infer_frame(
         # No mask: treat everything as uncertain
         mask_2k = np.full((MODEL_SIZE, MODEL_SIZE, 1), 0.5, dtype=np.float32)
     elif trimap_radius > 0:
-        # Build trimap at MODEL_SIZE resolution — ~8× cheaper than native 6K.
-        # Scale radius proportionally: 40px at 6K → ~14px at 2048.
         scaled_r = max(1, round(trimap_radius * MODEL_SIZE / max(H, W)))
-        mask_2k  = _make_trimap(mask_2k, erode_r=scaled_r, dilate_r=scaled_r)
-        # trimap_full is the 2048px version; caller upsamples to native for enforcement.
-        trimap_full = mask_2k   # [2048, 2048, 1]
+
+        # Track A — tight trimap for post-inference hard constraints
+        trimap_full = _make_trimap(mask_2k, erode_r=scaled_r, dilate_r=scaled_r)
+
+        # Track B — degraded hint for model input, matching training distribution.
+        # GVM/VideoMaMa outputs are coarse, dilated, and blurry. Feeding a tight
+        # professional roto puts the model out of distribution — it expects to
+        # tighten/refine inward from a loose hint.
+        # Use a modest fixed dilation + small blur — keeps kernels small.
+        dil_r  = min(20, scaled_r * 2)
+        k_dil  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dil_r*2+1, dil_r*2+1))
+        hint   = cv2.dilate((mask_2k[:, :, 0] > 0.5).astype(np.uint8) * 255, k_dil)
+        hint   = cv2.GaussianBlur(hint.astype(np.float32) / 255.0, (11, 11), 0)
+        mask_2k = hint[:, :, None]
 
     # --- 2. linear → sRGB  (model trained on sRGB) ---
     img_srgb = _linear_to_srgb(img_2k, clip_input=True)  # SDR for model
