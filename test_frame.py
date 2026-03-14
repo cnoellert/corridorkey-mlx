@@ -22,6 +22,7 @@ python test_frame.py /path/to/frame.exr --garbage-matte /path/to/matte.exr --pre
 """
 from __future__ import annotations
 import argparse, re, time
+import cv2
 from pathlib import Path
 import numpy as np
 import mlx.core as mx
