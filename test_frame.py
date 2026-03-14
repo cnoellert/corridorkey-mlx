@@ -251,14 +251,15 @@ def infer_frame(
     # --- 8. Premultiply linear FG by model alpha ---
     fg_premul = fg_despilled_lin * pred_alpha
 
-    # key_rgba: linear premult RGBA (comp-ready EXR)
-    key_rgba = np.concatenate([fg_premul, pred_alpha], axis=-1)  # [H, W, 4]
-
-    # fg_srgb: straight sRGB FG (reference engine writes this as-is, no linearization)
-    # Alpha channel included for the straight RGBA fg EXR output.
+    # fg_srgb: straight sRGB FG (no linearization — matches reference engine)
     fg_straight_srgb = np.concatenate([fg_srgb_hybrid, pred_alpha], axis=-1)  # [H, W, 4]
 
-    return key_rgba, fg_straight_srgb, trimap_full  # two RGBA arrays + trimap
+    # key_rgba: sRGB premult RGBA — FG * alpha in sRGB space.
+    # Linear premult looks dark in Flame without a scene-linear display transform.
+    # sRGB premult displays correctly in any viewer and is what Flame expects.
+    key_srgb_premul = np.concatenate([fg_srgb_hybrid * pred_alpha, pred_alpha], axis=-1)
+
+    return key_srgb_premul, fg_straight_srgb, trimap_full
 
 
 def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
