@@ -412,14 +412,15 @@ def main():
     # Enforce trimap hard constraints using the trimap computed inside infer_frame
     # (no recomputation — morphological ops only happen once per frame).
     if trimap_full is not None:
-        # trimap_full is at MODEL_SIZE (2048); upsample to native res for enforcement
-        tri_ch = cv2.resize(trimap_full[:, :, 0], (W, H), interpolation=cv2.INTER_NEAREST)
+        # Only enforce BG constraint — zero out definite green screen pixels.
+        # Do NOT force FG to 1.0: the model should freely add hair/edge detail
+        # beyond the hint boundary. That's the whole point of the neural keyer.
+        tri_ch   = cv2.resize(trimap_full[:, :, 0], (W, H), interpolation=cv2.INTER_NEAREST)
         alpha_ch = result[:, :, 3]
-        alpha_ch = np.where(tri_ch >= 1.0, 1.0,
-                   np.where(tri_ch <= 0.0, 0.0, alpha_ch)).astype(np.float32)
+        alpha_ch = np.where(tri_ch <= 0.0, 0.0, alpha_ch).astype(np.float32)
         result   = np.concatenate([result[:, :, :3] * alpha_ch[:, :, None],
                                    alpha_ch[:, :, None]], axis=-1)
-        print(f"[test] Trimap constraints enforced (r={args.trimap_radius}px)")
+        print(f"[test] BG constraint enforced (r={args.trimap_radius}px)")
 
     # Apply garbage matte post-inference
     if args.garbage_matte:
