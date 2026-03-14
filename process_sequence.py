@@ -147,7 +147,6 @@ def _process_frame(
     from test_frame import (
         _read_exr_rgb, _read_exr_mask, _write_exr,
         _read_exr_compression, infer_frame, _apply_garbage_matte,
-        _make_trimap,
     )
 
     t_start = time.time()
@@ -161,8 +160,8 @@ def _process_frame(
     if matte_path and matte_path.exists():
         mask = _read_exr_mask(matte_path, H, W)
 
-    # Inference
-    result, trimap_full = infer_frame(
+    # Inference — infer_frame returns (key_srgb_premul, fg_straight_srgb, trimap_full)
+    result, fg_straight, trimap_full = infer_frame(
         model, rgb_linear, mask,
         input_is_srgb=input_is_srgb,
         despill_strength=despill_strength,
@@ -171,27 +170,16 @@ def _process_frame(
         trimap_radius=trimap_radius,
     )
 
-    # Enforce trimap hard constraints using trimap returned from infer_frame
-    if trimap_full is not None:
-        import cv2 as _cv2
-        tri_ch   = _cv2.resize(trimap_full[:, :, 0], (W, H), interpolation=_cv2.INTER_NEAREST)
-        alpha_ch = result[:, :, 3]
-        alpha_ch = np.where(tri_ch <= 0.0, 0.0, alpha_ch).astype(np.float32)
-        result   = np.concatenate([result[:, :, :3] * alpha_ch[:, :, None],
-                                   alpha_ch[:, :, None]], axis=-1)
-
     # Apply garbage matte post-inference
     if matte_path and matte_path.exists():
-        gm = _read_exr_mask(matte_path, H, W)
-        result = _apply_garbage_matte(result, gm, dilation_px=gm_dilation)
+        gm     = _read_exr_mask(matte_path, H, W)
+        result      = _apply_garbage_matte(result,      gm, dilation_px=gm_dilation)
+        fg_straight = _apply_garbage_matte(fg_straight, gm, dilation_px=gm_dilation)
 
-    # Unpack result into constituent outputs
-    alpha_out = result[:, :, 3:4]
-    key_out   = result
-    eps       = 1e-6
-    fg_out    = np.concatenate(
-        [result[:, :, :3] / (alpha_out + eps), alpha_out], axis=-1
-    )
+    # Unpack outputs
+    alpha_out = result[:, :, 3:4]   # linear alpha
+    key_out   = result               # sRGB premult RGBA
+    fg_out    = fg_straight          # sRGB straight RGBA
 
     # Build output paths: base_suffix.frame.exr  e.g. DC_0190_raw_L02_alpha.1053.exr
     import re as _re
