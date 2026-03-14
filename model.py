@@ -542,10 +542,9 @@ class GreenFormer(nn.Module):
         rgb         = x[:, :, :, :3]
         coarse_pred = mx.concatenate([alpha_coarse, fg_coarse], axis=-1)  # [N,H,W,4]
 
-        if self.use_refiner and self.refiner is not None:
-            delta_logits = self.refiner(rgb, coarse_pred)
-        else:
-            delta_logits = mx.zeros_like(coarse_pred)
+        # Refiner disabled: MLX port produces large negative FG deltas (bug TBD).
+        # Coarse backbone output is correct and usable without refiner.
+        delta_logits = mx.zeros_like(coarse_pred)
 
         delta_alpha = delta_logits[:, :, :, 0:1]
         delta_fg    = delta_logits[:, :, :, 1:4]
