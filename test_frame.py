@@ -239,14 +239,19 @@ def infer_frame(
         pred_alpha = _clean_matte(pred_alpha, area_threshold=despeckle_size)
 
     # --- 7. Despill ORIGINAL plate (sRGB space) ---
-    #   Convert original linear → sRGB, despill, convert back to linear.
-    #   We never use the model's fg reconstruction for color — original plate only.
-    orig_srgb     = _linear_to_srgb(rgb_linear)  # clip_input=False: preserve HDR for round-trip
-    orig_despilled = _despill(orig_srgb, strength=despill_strength)
-    orig_lin       = _srgb_to_linear(orig_despilled)
+    #   If input is already sRGB, despill directly — no conversion needed.
+    #   If input is linear, convert to sRGB, despill, convert back.
+    if input_is_srgb:
+        orig_srgb      = np.clip(rgb_linear, 0.0, 1.0).astype(np.float32)
+        orig_despilled = _despill(orig_srgb, strength=despill_strength)
+        orig_out       = orig_despilled   # stays in sRGB — no linearization for premult
+    else:
+        orig_srgb      = _linear_to_srgb(rgb_linear)  # clip_input=False: preserve HDR
+        orig_despilled = _despill(orig_srgb, strength=despill_strength)
+        orig_out       = _srgb_to_linear(orig_despilled)  # back to linear for premult
 
-    # --- 8. Premultiply original linear plate by model alpha ---
-    fg_premul = orig_lin * pred_alpha
+    # --- 8. Premultiply original plate by model alpha ---
+    fg_premul = orig_out * pred_alpha
 
     return np.concatenate([fg_premul, pred_alpha], axis=-1), trimap_full  # [H, W, 4]
 
