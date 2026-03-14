@@ -134,15 +134,19 @@ def _write_exr(path: Path, data: np.ndarray,
     f.close()
 
 
-def _write_preview(path: Path, rgba_premul_linear: np.ndarray) -> None:
+def _write_preview(path: Path, rgba_premul: np.ndarray,
+                   input_is_srgb: bool = False) -> None:
     """Comp premult RGBA over black, sRGB encode, save PNG.
-    Input is premult linear — for display we just clip and sRGB-encode
-    (compositing over black = premult values are already the comp).
+    If input_is_srgb, data is already in sRGB — skip gamma encoding.
+    If linear, apply linear→sRGB before writing.
     """
     from PIL import Image
-    rgb  = rgba_premul_linear[:, :, :3]
-    rgb  = np.clip(rgb, 0.0, None)           # kill negatives from Lanczos
-    rgb8 = (_linear_to_srgb(rgb, clip_input=True) * 255).clip(0, 255).astype(np.uint8)
+    rgb  = rgba_premul[:, :, :3]
+    rgb  = np.clip(rgb, 0.0, None)
+    if input_is_srgb:
+        rgb8 = (rgb * 255).clip(0, 255).astype(np.uint8)
+    else:
+        rgb8 = (_linear_to_srgb(rgb, clip_input=True) * 255).clip(0, 255).astype(np.uint8)
     Image.fromarray(rgb8).save(str(path))
     print(f"  Preview: {path.name}")
 
@@ -455,7 +459,7 @@ def main():
     print(f"  {_outpath('key').name}    (premult RGBA — comp-ready)")
 
     if args.preview:
-        _write_preview(out_dir / f"{stem}_preview.png", result)
+        _write_preview(out_dir / f"{stem}_preview.png", result, input_is_srgb=args.input_is_srgb)
 
     print("[test] Complete.")
 
