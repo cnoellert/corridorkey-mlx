@@ -209,7 +209,7 @@ def infer_frame(
 
     # Flush Metal cache after numpy conversion — prevents graph/cache
     # accumulation across frames which causes steadily increasing frame times.
-    mx.metal.clear_cache()
+    mx.clear_cache()
 
     # --- 5. Lanczos upsample back to native resolution ---
     if (H, W) != (MODEL_SIZE, MODEL_SIZE):
