@@ -232,7 +232,7 @@ def infer_frame(
     # --- 8. Premultiply original linear plate by model alpha ---
     fg_premul = orig_lin * pred_alpha
 
-    return np.concatenate([fg_premul, pred_alpha], axis=-1)  # [H, W, 4]
+    return np.concatenate([fg_premul, pred_alpha], axis=-1), trimap_full  # [H, W, 4]
 
 
 def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
@@ -255,7 +255,7 @@ def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
         b = blur_size * 2 + 1
         cleaned = cv2.GaussianBlur(cleaned, (b, b), 0)
     result = alpha * (cleaned.astype(np.float32) / 255.0)
-    return result, trimap_full[:, :, None] if squeeze else result
+    return result[:, :, None] if squeeze else result
 
 
 def _make_trimap(mask: np.ndarray, erode_r: int = 40, dilate_r: int = 40) -> np.ndarray:
