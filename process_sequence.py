@@ -146,6 +146,7 @@ def _process_frame(
     from test_frame import (
         _read_exr_rgb, _read_exr_mask, _write_exr,
         _read_exr_compression, infer_frame, _apply_garbage_matte,
+        _make_trimap,
     )
 
     t_start = time.time()
