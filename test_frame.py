@@ -251,7 +251,14 @@ def infer_frame(
     # --- 8. Premultiply linear FG by model alpha ---
     fg_premul = fg_despilled_lin * pred_alpha
 
-    return np.concatenate([fg_premul, pred_alpha], axis=-1), trimap_full  # [H, W, 4]
+    # key_rgba: linear premult RGBA (comp-ready EXR)
+    key_rgba = np.concatenate([fg_premul, pred_alpha], axis=-1)  # [H, W, 4]
+
+    # fg_srgb: straight sRGB FG (reference engine writes this as-is, no linearization)
+    # Alpha channel included for the straight RGBA fg EXR output.
+    fg_straight_srgb = np.concatenate([fg_srgb_hybrid, pred_alpha], axis=-1)  # [H, W, 4]
+
+    return key_rgba, fg_straight_srgb, trimap_full  # two RGBA arrays + trimap
 
 
 def _clean_matte(alpha: np.ndarray, area_threshold: int = 400,
@@ -392,7 +399,7 @@ def main():
     # Inference
     print(f"[test] Inferring …")
     t0     = time.time()
-    result, trimap_full = infer_frame(
+    result, fg_straight, trimap_full = infer_frame(
         gf, rgb_linear, mask,
         input_is_srgb=args.input_is_srgb,
         despill_strength=args.despill_strength,
@@ -415,19 +422,16 @@ def main():
     if args.garbage_matte:
         print(f"[test] Applying garbage matte (dilation={args.gm_dilation}px) …")
         gm = _read_exr_mask(args.garbage_matte.expanduser().resolve(), H, W)
-        result = _apply_garbage_matte(result, gm, dilation_px=args.gm_dilation)
+        result      = _apply_garbage_matte(result,      gm, dilation_px=args.gm_dilation)
+        fg_straight = _apply_garbage_matte(fg_straight, gm, dilation_px=args.gm_dilation)
         alpha2 = result[:, :, 3:4]
         print(f"[test] Alpha after GM: min={float(alpha2.min()):.4f}  "
               f"max={float(alpha2.max()):.4f}  mean={float(alpha2.mean()):.4f}")
 
     # Unpack premult result into constituent outputs
-    alpha_out    = result[:, :, 3:4]
-    key_out      = result                                      # premult RGBA — comp-ready
-    # Straight FG: unpremultiply RGB, embed alpha.
-    # eps guards transparent regions against divide-by-zero.
-    eps          = 1e-6
-    rgb_straight = result[:, :, :3] / (alpha_out + eps)
-    fg_out       = np.concatenate([rgb_straight, alpha_out], axis=-1)
+    alpha_out = result[:, :, 3:4]      # linear alpha, no gamma
+    key_out   = result                 # linear premult RGBA — comp-ready
+    fg_out    = fg_straight            # sRGB straight RGBA (match reference engine)
 
     print(f"[test] Writing to {out_dir} …")
     def _outpath(suffix):
