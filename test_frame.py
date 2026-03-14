@@ -196,14 +196,14 @@ def infer_frame(
         trimap_full = _make_trimap(mask_2k, erode_r=scaled_r, dilate_r=scaled_r)
 
         # Track B — degraded hint for model input, matching training distribution.
-        # GVM/VideoMaMa outputs are coarse, dilated, and blurry. Feeding a tight
-        # professional roto puts the model out of distribution — it expects to
-        # tighten/refine inward from a loose hint.
-        # Use a modest fixed dilation + small blur — keeps kernels small.
+        # IMPORTANT: do NOT binarize the Flame key before building the hint.
+        # A chroma key has soft/semi-transparent values in hair wisps — binarizing
+        # at 0.5 throws those away and the model has no idea the wisps exist.
+        # Instead: dilate the soft mask (max-pool equivalent), then blur slightly.
         dil_r  = min(20, scaled_r * 2)
         k_dil  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dil_r*2+1, dil_r*2+1))
-        hint   = cv2.dilate((mask_2k[:, :, 0] > 0.5).astype(np.uint8) * 255, k_dil)
-        hint   = cv2.GaussianBlur(hint.astype(np.float32) / 255.0, (11, 11), 0)
+        hint   = cv2.dilate(mask_2k[:, :, 0], k_dil)          # soft dilate, no threshold
+        hint   = cv2.GaussianBlur(hint, (11, 11), 0)
         mask_2k = hint[:, :, None]
 
     # --- 2. linear → sRGB  (model trained on sRGB) ---
