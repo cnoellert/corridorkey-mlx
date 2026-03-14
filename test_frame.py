@@ -379,6 +379,23 @@ def main():
     print(f"[test] Alpha: min={float(alpha.min()):.4f}  max={float(alpha.max()):.4f}  "
           f"mean={float(alpha.mean()):.4f}")
 
+    # Enforce trimap hard constraints post-inference.
+    # The model receives the trimap as guidance only — not a hard constraint.
+    # Pixels deep in FG or BG zones can still flicker frame-to-frame as the
+    # model interprets image content differently each frame.
+    # Forcing FG→1.0 and BG→0.0 eliminates that flicker entirely.
+    if mask is not None and args.trimap_radius > 0:
+        import cv2 as _cv2
+        trimap = _make_trimap(mask, erode_r=args.trimap_radius, dilate_r=args.trimap_radius)
+        # Resize trimap to full output resolution (nearest — preserve hard zones)
+        tri_full = _cv2.resize(trimap[:, :, 0], (W, H), interpolation=_cv2.INTER_NEAREST)
+        alpha_ch = result[:, :, 3]
+        alpha_ch = np.where(tri_full >= 1.0, 1.0,
+                   np.where(tri_full <= 0.0, 0.0, alpha_ch)).astype(np.float32)
+        result   = np.concatenate([result[:, :, :3] * alpha_ch[:, :, None],
+                                   alpha_ch[:, :, None]], axis=-1)
+        print(f"[test] Trimap constraints enforced (r={args.trimap_radius}px)")
+
     # Apply garbage matte post-inference
     if args.garbage_matte:
         print(f"[test] Applying garbage matte (dilation={args.gm_dilation}px) …")

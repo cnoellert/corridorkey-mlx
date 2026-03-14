@@ -168,6 +168,17 @@ def _process_frame(
         trimap_radius=trimap_radius,
     )
 
+    # Enforce trimap hard constraints post-inference
+    if mask is not None and trimap_radius > 0:
+        import cv2 as _cv2
+        trimap = _make_trimap(mask, erode_r=trimap_radius, dilate_r=trimap_radius)
+        tri_full = _cv2.resize(trimap[:, :, 0], (W, H), interpolation=_cv2.INTER_NEAREST)
+        alpha_ch = result[:, :, 3]
+        alpha_ch = np.where(tri_full >= 1.0, 1.0,
+                   np.where(tri_full <= 0.0, 0.0, alpha_ch)).astype(np.float32)
+        result   = np.concatenate([result[:, :, :3] * alpha_ch[:, :, None],
+                                   alpha_ch[:, :, None]], axis=-1)
+
     # Apply garbage matte post-inference
     if matte_path and matte_path.exists():
         gm = _read_exr_mask(matte_path, H, W)
