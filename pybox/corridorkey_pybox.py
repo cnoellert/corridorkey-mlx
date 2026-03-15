@@ -82,7 +82,7 @@ class CorridorKeyBox(pybox.BaseClass):
             ),
             pybox.create_toggle_button(
                 "Quantized", value=False, default=False,
-                row=1, col=0, page=0,
+                row=2, col=0, page=0,
                 tooltip="Use int8 quantized weights (faster, smaller, minimal quality loss).",
             ),
             # Page 1 — Settings: processing controls
