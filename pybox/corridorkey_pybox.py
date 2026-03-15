@@ -156,29 +156,29 @@ class CorridorKeyBox(pybox.BaseClass):
         self.add_global_elements(
             pybox.create_file_browser(
                 "Weights", DEFAULT_WEIGHTS, "npz", os.path.expanduser("~"),
-                row=0, col=0,
+                row=0, col=0, page=0,
                 tooltip="Path to .mlx.npz weights file",
             ),
             pybox.create_float_numeric(
                 "Despill Strength", value=1.0, default=1.0,
                 min=0.0, max=1.0, inc=0.05,
-                row=1, col=0,
+                row=1, col=0, page=0,
                 tooltip="Green spill removal (0=off, 1=full)",
             ),
             pybox.create_toggle_button(
                 "Input is sRGB", value=True, default=True,
-                row=2, col=0,
+                row=2, col=0, page=0,
                 tooltip="On for REC709 footage; off for scene-linear EXR",
             ),
             pybox.create_toggle_button(
                 "Despeckle", value=False, default=False,
-                row=3, col=0,
-                tooltip="Remove isolated alpha specks (degrades hair edges — off by default)",
+                row=3, col=0, page=0,
+                tooltip="Remove isolated alpha specks (off by default)",
             ),
             pybox.create_toggle_button(
                 "Reprocess", value=False, default=False,
-                row=0, col=1,
-                tooltip="Bump to re-run inference with current params on current frame",
+                row=0, col=0, page=1,
+                tooltip="Bump to re-run inference on current frame",
             ),
         )
         self.set_ui_pages(pybox.create_page("CorridorKey", "Settings", "Actions"))
@@ -217,20 +217,32 @@ class CorridorKeyBox(pybox.BaseClass):
             self.set_global_element_value("Reprocess", False)
 
         # Lazy daemon spawn — first execute() after node load.
-        # Never block Flame's thread waiting for model load — just spawn and return.
-        # Flame will call execute() again on the next frame; by then the model will be ready.
         if not os.path.exists(READY):
-            # Only spawn if daemon isn't already running
             if not os.path.exists(PARAMS_FILE + ".spawned"):
                 try:
                     weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
                 except Exception:
                     weights = DEFAULT_WEIGHTS
                 _spawn_daemon(weights)
-                # Leave a breadcrumb so we don't double-spawn
                 open(PARAMS_FILE + ".spawned", "w").close()
-            # Return without error — model is loading, try again next frame
-            return
+
+            # Block briefly (up to 30s) so the user sees a loading notice.
+            # Poll in small increments — return early once ready.
+            self.set_notice_msg("CorridorKey: loading model, please wait...")
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if os.path.exists(READY):
+                    break
+                time.sleep(0.5)
+
+            if not os.path.exists(READY):
+                self.set_warning_msg(
+                    "CorridorKey: model still loading. "
+                    "Try scrubbing to this frame again in a moment."
+                )
+                return
+
+            self.set_notice_msg("")  # Clear loading notice
 
         params = {
             "frame":            self.get_frame(),
