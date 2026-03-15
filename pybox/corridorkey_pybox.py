@@ -146,9 +146,8 @@ class CorridorKeyBox(pybox.BaseClass):
         self.add_out_socket("Result",   OUT_FG)
         self.add_out_socket("OutMatte", OUT_ALPHA)
 
-        # Spawn daemon with default weights — UI doesn't exist yet here
-        _kill_daemon()
-        _spawn_daemon(DEFAULT_WEIGHTS)
+        # NOTE: Do NOT spawn daemon here — os.system() in initialize() crashes Flame.
+        # Daemon is spawned lazily on first execute() call instead.
 
         self.set_state_id("setup_ui")
         self.setup_ui()
@@ -191,21 +190,25 @@ class CorridorKeyBox(pybox.BaseClass):
         reprocess = self.get_global_element_value("Reprocess")
 
         # Weights changed — restart daemon with new path
+        weights_changed = False
         for el in changes:
             if el.get("name") == "Weights":
-                try:
-                    new_weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
-                except Exception:
-                    new_weights = DEFAULT_WEIGHTS
-                _kill_daemon()
-                _spawn_daemon(new_weights)
-                if not _wait_for_ready():
-                    self.set_error_msg(
-                        "CorridorKey: daemon failed to start. "
-                        "Check /tmp/corridorkey_daemon.log"
-                    )
-                    return
+                weights_changed = True
                 break
+
+        if weights_changed:
+            try:
+                new_weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
+            except Exception:
+                new_weights = DEFAULT_WEIGHTS
+            _kill_daemon()
+            _spawn_daemon(new_weights)
+            if not _wait_for_ready():
+                self.set_error_msg(
+                    "CorridorKey: daemon failed to start. "
+                    "Check /tmp/corridorkey_daemon.log"
+                )
+                return
 
         # UI-only change — skip inference unless Reprocess toggled
         if changes and not reprocess:
@@ -214,8 +217,13 @@ class CorridorKeyBox(pybox.BaseClass):
         if reprocess:
             self.set_global_element_value("Reprocess", False)
 
-        # Ensure daemon is alive and ready
+        # Lazy daemon spawn — first execute() after node load
         if not os.path.exists(READY):
+            try:
+                weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
+            except Exception:
+                weights = DEFAULT_WEIGHTS
+            _spawn_daemon(weights)
             if not _wait_for_ready():
                 self.set_error_msg(
                     "CorridorKey: model not loaded yet. "
