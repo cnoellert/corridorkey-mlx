@@ -158,10 +158,10 @@ def main():
             # Atomic writes -- write to .tmp then rename so Flame never
             # sees a partial file when it wakes on the DONE sentinel.
             alpha_rgb = np.stack([alpha, alpha, alpha], axis=-1)
-            _write_exr(out_fg    + ".tmp", fg,        compression=LOSSLESS)
-            _write_exr(out_alpha + ".tmp", alpha_rgb, compression=LOSSLESS)
-            os.rename(out_fg    + ".tmp", out_fg)
-            os.rename(out_alpha + ".tmp", out_alpha)
+            _write_exr(str(out_fg)    + ".tmp", fg,        compression=LOSSLESS)
+            _write_exr(str(out_alpha) + ".tmp", alpha_rgb, compression=LOSSLESS)
+            os.rename(str(out_fg)    + ".tmp", str(out_fg))
+            os.rename(str(out_alpha) + ".tmp", str(out_alpha))
 
             mx.clear_cache()
             print(f"[daemon] Frame {frame} done", flush=True)
