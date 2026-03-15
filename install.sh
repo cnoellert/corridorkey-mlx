@@ -38,7 +38,21 @@ fi
 
 # ── Conda ──────────────────────────────────────────────────────────────────
 if ! command -v conda &>/dev/null; then
-    error "conda not found. Install Miniconda first: https://docs.conda.io/en/latest/miniconda.html"
+    echo ""
+    echo -e "${RED}[corridorkey] ERROR${NC} conda not found."
+    echo ""
+    echo "  Install Miniconda first, then re-run this script:"
+    echo ""
+    if [[ "$PLATFORM" == "Darwin" ]]; then
+        echo "    brew install miniconda"
+        echo "    # or: https://docs.conda.io/en/latest/miniconda.html"
+    else
+        echo "    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
+        echo "    bash Miniconda3-latest-Linux-x86_64.sh"
+        echo "    # then restart your shell"
+    fi
+    echo ""
+    exit 1
 fi
 
 CONDA_BASE="$(conda info --base)"

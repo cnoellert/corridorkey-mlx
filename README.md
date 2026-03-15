@@ -10,8 +10,13 @@ Runs on **macOS Apple Silicon** (MLX) and **Linux CUDA** (Rocky Linux / Ubuntu).
 
 | Platform | Hardware | Software |
 |----------|----------|----------|
-| macOS | Apple Silicon (M1–M4) | Miniconda, Flame 2025+ |
-| Linux | NVIDIA GPU (RTX/A-series) | Miniconda, CUDA 12.x, Flame 2025+ |
+| macOS | Apple Silicon (M1–M4) | **Miniconda**, Flame 2025+ |
+| Linux | NVIDIA GPU (RTX/A-series, 24GB+ recommended) | **Miniconda**, CUDA 12.x, Flame 2025+ |
+
+**Miniconda is required** — the installer uses conda to manage Python environments.
+
+- macOS: `brew install miniconda` or https://docs.conda.io/en/latest/miniconda.html
+- Linux: `wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh && bash Miniconda3-latest-Linux-x86_64.sh`
 
 > **Linux note:** Do not run ComfyUI or other GPU-heavy processes alongside Flame. The daemon uses CPU offload (model lives in system RAM, moves to GPU per-frame) but Flame itself holds ~20GB of VRAM on a 24GB card.
 
