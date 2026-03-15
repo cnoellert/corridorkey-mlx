@@ -139,18 +139,20 @@ class CorridorKeyBox(pybox.BaseClass):
             _spawn_daemon(new_weights, quantized=quantized)
             return
 
-        # Inference only fires on explicit Reprocess toggle.
-        # Despill/Despeckle/sRGB changes update params but don't auto-run --
-        # operator scrubs values then hits Reprocess when ready.
-        if not reprocess:
+        # Auto-run on first execute (no output exists yet).
+        # After that, inference only fires on explicit Reprocess.
+        first_run = not os.path.exists(OUT_FG)
+
+        if not first_run and not reprocess:
             return
 
-        # Clear Reprocess immediately so it acts as a momentary button
-        self.set_render_element_value("Reprocess", False)
+        # Clear Reprocess so it acts as a momentary button
+        if reprocess:
+            self.set_render_element_value("Reprocess", False)
 
         # Skip if daemon is still busy
         if os.path.exists(TRIGGER):
-            self.set_warning_msg("CorridorKey: still processing previous frame, try again.")
+            self.set_warning_msg("CorridorKey: still processing, try again shortly.")
             return
 
         if not os.path.exists(READY):
