@@ -202,13 +202,12 @@ class CorridorKeyBox(pybox.BaseClass):
             except Exception:
                 new_weights = DEFAULT_WEIGHTS
             _kill_daemon()
+            # Clear spawned breadcrumb so lazy init re-triggers
+            for f in (PARAMS_FILE + ".spawned", READY):
+                try: os.unlink(f)
+                except OSError: pass
             _spawn_daemon(new_weights)
-            if not _wait_for_ready():
-                self.set_error_msg(
-                    "CorridorKey: daemon failed to start. "
-                    "Check /tmp/corridorkey_daemon.log"
-                )
-                return
+            return  # Non-blocking — model loads async, next frame will pick it up
 
         # UI-only change — skip inference unless Reprocess toggled
         if changes and not reprocess:
@@ -217,19 +216,21 @@ class CorridorKeyBox(pybox.BaseClass):
         if reprocess:
             self.set_global_element_value("Reprocess", False)
 
-        # Lazy daemon spawn — first execute() after node load
+        # Lazy daemon spawn — first execute() after node load.
+        # Never block Flame's thread waiting for model load — just spawn and return.
+        # Flame will call execute() again on the next frame; by then the model will be ready.
         if not os.path.exists(READY):
-            try:
-                weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
-            except Exception:
-                weights = DEFAULT_WEIGHTS
-            _spawn_daemon(weights)
-            if not _wait_for_ready():
-                self.set_error_msg(
-                    "CorridorKey: model not loaded yet. "
-                    "Check /tmp/corridorkey_daemon.log"
-                )
-                return
+            # Only spawn if daemon isn't already running
+            if not os.path.exists(PARAMS_FILE + ".spawned"):
+                try:
+                    weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
+                except Exception:
+                    weights = DEFAULT_WEIGHTS
+                _spawn_daemon(weights)
+                # Leave a breadcrumb so we don't double-spawn
+                open(PARAMS_FILE + ".spawned", "w").close()
+            # Return without error — model is loading, try again next frame
+            return
 
         params = {
             "frame":            self.get_frame(),
