@@ -61,7 +61,7 @@ def main():
     # Load model once
     # ------------------------------------------------------------------
     print(f"[daemon] Loading GreenFormer from {weights_path} …", flush=True)
-    model = GreenFormer(img_size=2048)
+    model = GreenFormer()
     weights = mx.load(str(weights_path))
     model.load_weights(list(weights.items()))
     mx.eval(model.parameters())
