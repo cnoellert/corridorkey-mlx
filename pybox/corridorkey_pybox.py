@@ -1,10 +1,12 @@
 from __future__ import print_function
-import json, os, subprocess, sys, time
+import json, os, platform, subprocess, sys, time
 import pybox_v1 as pybox
 
-PYBOX_DIR     = "/opt/corridorkey/pybox"
-DAEMON_SCRIPT = os.path.join(PYBOX_DIR, "corridorkey_daemon.py")
-CONDA_ENV     = "corridorkey-mlx"
+PYBOX_DIR  = "/opt/corridorkey/pybox"
+_IS_MACOS  = platform.system() == "Darwin"
+DAEMON_SCRIPT = os.path.join(PYBOX_DIR,
+    "corridorkey_daemon_mlx.py" if _IS_MACOS else "corridorkey_daemon_cuda.py")
+CONDA_ENV  = "corridorkey-mlx" if _IS_MACOS else "corridorkey-cuda"
 _PFX          = "/tmp/corridorkey_"
 IN_PLATE      = _PFX + "in_plate.exr"
 IN_MATTE      = _PFX + "in_matte.exr"
