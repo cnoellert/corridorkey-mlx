@@ -18,9 +18,11 @@ from pathlib import Path
 
 import numpy as np
 
-# Repo root on sys.path
-_HERE = Path(__file__).parent.parent.resolve()
-sys.path.insert(0, str(_HERE))
+# Repo root on sys.path.
+# __file__ resolves correctly here (daemon is spawned directly, not copied by Flame).
+# But hardcode for safety in case install layout changes.
+_REPO_ROOT = Path(os.path.expanduser("~/Documents/GitHub/corridorkey-mlx"))
+sys.path.insert(0, str(_REPO_ROOT))
 
 import mlx.core as mx
 from model import GreenFormer
