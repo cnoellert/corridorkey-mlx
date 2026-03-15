@@ -38,10 +38,12 @@ def _spawn_daemon(weights_path, quantized=False):
     if _daemon_running():
         return   # already running, don't spawn a second
     _cleanup_sentinels()
+    env_vars = "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True " if not _IS_MACOS else ""
     cmd = (
         "source ~/.zprofile 2>/dev/null; "
         "source ~/miniconda3/etc/profile.d/conda.sh; "
         f"conda activate {CONDA_ENV}; "
+        f"{env_vars}"
         f"python3 {DAEMON_SCRIPT} "
         f"  {'--quantized' if quantized else ''} "
         f"  --weights '{weights_path}' "

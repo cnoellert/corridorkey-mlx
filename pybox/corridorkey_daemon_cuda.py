@@ -104,6 +104,7 @@ def main():
     print(f"[daemon] Loading CorridorKey on {device} from {args.weights} ...", flush=True)
 
     from CorridorKeyModule.inference_engine import CorridorKeyEngine
+    import torch
     engine = CorridorKeyEngine(
         checkpoint_path=args.weights,
         device=str(device),
@@ -112,6 +113,9 @@ def main():
     )
     if device.type in ("cuda", "mps"):
         engine = OptimizedEngine(engine)
+    # Cast to float16 on CUDA to halve VRAM usage (~12GB vs ~24GB)
+    if device.type == "cuda":
+        engine.model = engine.model.half()
 
     print(f"[daemon] Model ready on {device}", flush=True)
     open(ready, "w").close()
