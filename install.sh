@@ -98,11 +98,15 @@ cp "$REPO_DIR"/pybox/corridorkey_pybox.py      "$INSTALL_ROOT/pybox/"
 cp "$REPO_DIR"/pybox/corridorkey_daemon_mlx.py "$INSTALL_ROOT/pybox/"
 cp "$REPO_DIR"/pybox/corridorkey_daemon_cuda.py "$INSTALL_ROOT/pybox/"
 
-# ── Reference inference code (CUDA only) ──────────────────────────────────
+# ── Reference inference code ──────────────────────────────────────────────
 if [[ "$PLATFORM" == "Linux" ]]; then
     info "Installing PyTorch reference inference code..."
     cp -r "$REPO_DIR/reference/CorridorKeyModule" "$INSTALL_ROOT/reference/"
     cp -r "$REPO_DIR/reference/utils"             "$INSTALL_ROOT/reference/"
+else
+    info "Installing MLX inference code..."
+    mkdir -p "$INSTALL_ROOT/mlx"
+    cp -r "$REPO_DIR/reference/mlx/"* "$INSTALL_ROOT/mlx/"
 fi
 
 # ── Weights ────────────────────────────────────────────────────────────────
