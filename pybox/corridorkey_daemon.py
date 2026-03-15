@@ -63,7 +63,9 @@ def main():
     print(f"[daemon] Loading GreenFormer from {weights_path} …", flush=True)
     model = GreenFormer()
     weights = mx.load(str(weights_path))
-    model.load_weights(list(weights.items()))
+    # Strip metadata keys injected by convert.py (not model parameters)
+    _META = {"__src_path__", "__src_sha256__"}
+    model.load_weights([(k, v) for k, v in weights.items() if k not in _META])
     mx.eval(model.parameters())
     print("[daemon] Model ready", flush=True)
 
