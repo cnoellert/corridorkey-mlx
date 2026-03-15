@@ -139,11 +139,21 @@ class CorridorKeyBox(pybox.BaseClass):
             _spawn_daemon(new_weights, quantized=quantized)
             return
 
-        # Auto-run on first execute (no output exists yet).
-        # After that, inference only fires on explicit Reprocess.
-        first_run = not os.path.exists(OUT_FG)
+        # Run inference when:
+        #   1. No output exists yet (first run)
+        #   2. Frame has changed since last inference
+        #   3. Reprocess explicitly toggled
+        current_frame = self.get_frame()
+        last_frame_file = PARAMS_FILE + ".last_frame"
+        try:
+            last_frame = int(open(last_frame_file).read().strip())
+        except Exception:
+            last_frame = None
 
-        if not first_run and not reprocess:
+        frame_changed = (last_frame != current_frame)
+        first_run     = not os.path.exists(OUT_FG)
+
+        if not first_run and not frame_changed and not reprocess:
             return
 
         # Clear Reprocess so it acts as a momentary button
@@ -154,6 +164,9 @@ class CorridorKeyBox(pybox.BaseClass):
         if os.path.exists(TRIGGER):
             self.set_warning_msg("CorridorKey: still processing, try again shortly.")
             return
+
+        # Record current frame
+        open(last_frame_file, "w").write(str(current_frame))
 
         if not os.path.exists(READY):
             if not os.path.exists(PARAMS_FILE + ".spawned"):
