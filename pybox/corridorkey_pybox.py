@@ -94,11 +94,13 @@ class CorridorKeyBox(pybox.BaseClass):
             pybox.create_float_numeric(
                 "Despill", value=1.0, default=1.0, min=0.0, max=1.0, inc=0.05,
                 row=1, col=0, page=1,
+                channel_name="despill_strength_chn",
                 tooltip="Green spill suppression strength (0=off, 1=full).",
             ),
             pybox.create_float_numeric(
                 "Despeckle", value=0.0, default=0.0, min=0.0, max=2000.0, inc=50.0,
                 row=2, col=0, page=1,
+                channel_name="despeckle_area_chn",
                 tooltip="Remove alpha specks smaller than this area in pixels. 0=off.",
             ),
             pybox.create_toggle_button(
