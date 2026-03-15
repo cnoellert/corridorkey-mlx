@@ -87,9 +87,9 @@ class CorridorKeyBox(pybox.BaseClass):
             ),
             # Page 1 — Settings: processing controls
             pybox.create_toggle_button(
-                "Linearize", value=False, default=False,
+                "Add sRGB Gamma", value=False, default=False,
                 row=0, col=0, page=1,
-                tooltip="Linearize sRGB input before processing. On for REC709 camera footage; off for scene-linear EXR.",
+                tooltip="Encode linear input to sRGB before inference, decode FG back to linear on output.",
             ),
             pybox.create_float_numeric(
                 "Despill", value=1.0, default=1.0, min=0.0, max=1.0, inc=0.05,
@@ -154,11 +154,11 @@ class CorridorKeyBox(pybox.BaseClass):
                 return
             self.set_notice_msg("")
 
-        # "Linearize" = treat input as sRGB and convert to linear before inference
-        linearize = bool(self.get_render_element_value("Linearize"))
+        # "Add sRGB Gamma": encode linear->sRGB before inference, decode FG back to linear after
+        add_srgb_gamma = bool(self.get_render_element_value("Add sRGB Gamma"))
         params = {
             "frame":            self.get_frame(),
-            "input_is_srgb":    linearize,
+            "add_srgb_gamma":    add_srgb_gamma,
             "despill_strength": float(self.get_render_element_value("Despill")),
             "despeckle":        float(self.get_render_element_value("Despeckle")),
         }
