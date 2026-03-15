@@ -139,18 +139,19 @@ class CorridorKeyBox(pybox.BaseClass):
             _spawn_daemon(new_weights, quantized=quantized)
             return
 
-        # Any change to inference params (Despill, Despeckle, Add sRGB Gamma)
-        # should run inference. Only skip if nothing changed and Reprocess not set.
-        if not changes and not reprocess:
+        # Inference only fires on explicit Reprocess toggle.
+        # Despill/Despeckle/sRGB changes update params but don't auto-run --
+        # operator scrubs values then hits Reprocess when ready.
+        if not reprocess:
             return
 
-        # Skip if daemon is still busy with a previous frame (TRIGGER still pending
-        # or READY gone). Prevents flooding the daemon when scrubbing sliders.
-        if os.path.exists(TRIGGER) or not os.path.exists(READY):
-            return
+        # Clear Reprocess immediately so it acts as a momentary button
+        self.set_render_element_value("Reprocess", False)
 
-        if reprocess:
-            self.set_render_element_value("Reprocess", False)
+        # Skip if daemon is still busy
+        if os.path.exists(TRIGGER):
+            self.set_warning_msg("CorridorKey: still processing previous frame, try again.")
+            return
 
         if not os.path.exists(READY):
             if not os.path.exists(PARAMS_FILE + ".spawned"):
