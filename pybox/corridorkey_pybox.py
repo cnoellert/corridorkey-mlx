@@ -87,7 +87,7 @@ class CorridorKeyBox(pybox.BaseClass):
             ),
             # Page 1 — Settings: processing controls
             pybox.create_toggle_button(
-                "Linearize", value=True, default=True,
+                "Linearize", value=False, default=False,
                 row=0, col=0, page=1,
                 tooltip="Linearize sRGB input before processing. On for REC709 camera footage; off for scene-linear EXR.",
             ),
