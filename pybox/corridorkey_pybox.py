@@ -139,7 +139,9 @@ class CorridorKeyBox(pybox.BaseClass):
             _spawn_daemon(new_weights, quantized=quantized)
             return
 
-        if changes and not reprocess:
+        # Any change to inference params (Despill, Despeckle, Add sRGB Gamma)
+        # should run inference. Only skip if nothing changed and Reprocess not set.
+        if not changes and not reprocess:
             return
 
         if reprocess:
