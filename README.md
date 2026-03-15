@@ -32,34 +32,52 @@ cd corridorkey-flame
 bash install.sh
 ```
 
-Optionally provide weights path directly:
+The installer handles everything automatically:
+- Detects platform (macOS → MLX env, Linux → CUDA env)
+- Creates the conda environment (`corridorkey-mlx` or `corridorkey-cuda`)
+- Installs Python dependencies (auto-detects CUDA version on Linux)
+- Creates `/opt/corridorkey/{models,pybox,reference}/`
+- Copies pybox and reference inference code into place
+- Downloads model weights from GitHub Releases (~380MB)
+
+If you already have weights locally, skip the download:
 
 ```bash
 bash install.sh --weights /path/to/CorridorKey_v1.0.pth
 ```
 
-The installer will:
-- Detect platform (macOS → MLX env, Linux → CUDA env)
-- Create the conda environment (`corridorkey-mlx` or `corridorkey-cuda`)
-- Install Python dependencies (auto-detects CUDA version on Linux)
-- Create `/opt/corridorkey/{models,pybox,reference}/`
-- Copy pybox and reference inference code into place
-- Copy weights if provided
-
-### 3. Copy weights (if not done above)
-
-| Platform | File |
-|----------|------|
-| macOS | `CorridorKey_v1.0.mlx.npz` → `/opt/corridorkey/models/` |
-| Linux | `CorridorKey_v1.0.pth` → `/opt/corridorkey/models/` |
-
-### 4. Add to Flame
+### 3. Add to Flame
 
 In Flame Batch, add a **PyBox** node and point it at:
 
 ```
 /opt/corridorkey/pybox/corridorkey_pybox.py
 ```
+
+---
+
+## Clean Reinstall
+
+To start fresh on any machine:
+
+```bash
+rm -rf /opt/corridorkey /opt/corridorkey-flame
+git clone https://github.com/cnoellert/corridorkey-flame.git /opt/corridorkey-flame
+cd /opt/corridorkey-flame
+bash install.sh
+```
+
+---
+
+## Updating
+
+```bash
+cd /opt/corridorkey-flame
+git pull
+bash install.sh
+```
+
+The installer skips steps that are already complete (existing conda env, existing weights).
 
 ---
 
@@ -89,10 +107,19 @@ In Flame Batch, add a **PyBox** node and point it at:
 
 ## Troubleshooting
 
-**`EnvironmentNameNotFound: corridorkey-mlx`** — Old pybox file installed. Run `git pull && make -C pybox install`.
+**`EnvironmentNameNotFound: corridorkey-mlx`** — Old pybox file installed. Run `git pull && bash install.sh`.
 
-**`CUDA out of memory`** — ComfyUI or another GPU process is running alongside Flame. Kill it and retry.
+**`can't open file '/opt/corridorkey/pybox/corridorkey_daemon_cuda.py'`** — `/opt/corridorkey/` was not created. Run `bash install.sh` from the repo directory.
+
+**`CUDA out of memory`** — ComfyUI or another GPU-heavy process is running alongside Flame. Kill it and retry. Check with `ps aux | grep -i comfy`.
 
 **Daemon not starting** — Check `/tmp/corridorkey_daemon.log` for the full error.
 
-**Frames not updating** — Check `/tmp/corridorkey_ready` exists (daemon loaded). If not, the model is still loading.
+**Frames not updating** — Check `/tmp/corridorkey_ready` exists (daemon loaded). If not, the model is still loading — give it 30–60 seconds on first run.
+
+**Force daemon restart** — Run:
+```bash
+pkill -f corridorkey_daemon_cuda   # or corridorkey_daemon_mlx on Mac
+rm -f /tmp/corridorkey_params.json.* /tmp/corridorkey_ready
+```
+Then trigger a frame in Flame.
