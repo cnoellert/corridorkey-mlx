@@ -128,7 +128,8 @@ class CorridorKeyBox(pybox.BaseClass):
             try:    quantized = bool(self.get_render_element_value("Quantized"))
             except: quantized = False
             _kill_daemon()
-            for f in (PARAMS_FILE + ".spawned", READY):
+            for f in (PARAMS_FILE + ".spawned", PARAMS_FILE + ".last_frame",
+                      READY, TRIGGER, OUT_FG, OUT_ALPHA):
                 try: os.unlink(f)
                 except OSError: pass
             _spawn_daemon(new_weights, quantized=quantized)
