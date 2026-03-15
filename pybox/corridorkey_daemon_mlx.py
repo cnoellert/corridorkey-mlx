@@ -155,14 +155,13 @@ def main():
             if add_srgb_gamma:
                 fg[:, :, :3] = _srgb_to_linear(fg[:, :, :3])
 
-            # Write FG first (Flame reads Result0 socket)
-            _write_exr(out_fg, fg, compression=LOSSLESS)
-
-            # Write alpha matte as 3-channel RGB EXR (R=G=B=alpha).
-            # Flame's OutMatte socket expects a standard image-format matte,
-            # not a single-channel 'A' or 'Y' EXR.
-            alpha_rgb = np.stack([alpha, alpha, alpha], axis=-1)  # [H, W, 3] contiguous
-            _write_exr(out_alpha, alpha_rgb, compression=LOSSLESS)
+            # Atomic writes -- write to .tmp then rename so Flame never
+            # sees a partial file when it wakes on the DONE sentinel.
+            alpha_rgb = np.stack([alpha, alpha, alpha], axis=-1)
+            _write_exr(out_fg    + ".tmp", fg,        compression=LOSSLESS)
+            _write_exr(out_alpha + ".tmp", alpha_rgb, compression=LOSSLESS)
+            os.rename(out_fg    + ".tmp", out_fg)
+            os.rename(out_alpha + ".tmp", out_alpha)
 
             mx.clear_cache()
             print(f"[daemon] Frame {frame} done", flush=True)

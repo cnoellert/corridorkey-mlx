@@ -210,8 +210,12 @@ def main():
             fg_rgba   = np.concatenate([fg_np, alpha_np], axis=-1)
             alpha_rgb = np.concatenate([alpha_np, alpha_np, alpha_np], axis=-1)
 
-            _write_exr(out_fg,    fg_rgba)
-            _write_exr(out_alpha, alpha_rgb)
+            # Atomic writes -- write to tmp then rename so Flame never
+            # sees a partial file when it wakes on the DONE sentinel.
+            _write_exr(out_fg    + ".tmp", fg_rgba)
+            _write_exr(out_alpha + ".tmp", alpha_rgb)
+            os.rename(out_fg    + ".tmp", out_fg)
+            os.rename(out_alpha + ".tmp", out_alpha)
 
             print(f"[daemon] Frame {frame} done", flush=True)
             open(done, "w").close()
