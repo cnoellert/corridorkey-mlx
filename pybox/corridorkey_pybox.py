@@ -65,13 +65,14 @@ def _cleanup_sentinels():
             pass
 
 
-def _spawn_daemon(weights_path):
+def _spawn_daemon(weights_path, quantized=False):
     _cleanup_sentinels()
     cmd = (
         "source ~/.zprofile 2>/dev/null; "
         "source ~/miniconda3/etc/profile.d/conda.sh; "
         f"conda activate {CONDA_ENV}; "
         f"python3 {DAEMON_SCRIPT} "
+        f"  {'--quantized' if quantized else ''} "
         f"  --weights '{weights_path}' "
         f"  --in-plate  {IN_PLATE}  "
         f"  --in-matte  {IN_MATTE}  "
@@ -160,10 +161,10 @@ class CorridorKeyBox(pybox.BaseClass):
                 tooltip="Path to .mlx.npz weights file",
             ),
             pybox.create_float_numeric(
-                "Despill Strength", value=1.0, default=1.0,
+                "Despill", value=1.0, default=1.0,
                 min=0.0, max=1.0, inc=0.05,
                 row=1, col=0, page=0,
-                tooltip="Green spill removal (0=off, 1=full)",
+                tooltip="Green spill suppression strength (0=off, 1=full)",
             ),
             pybox.create_toggle_button(
                 "Input is sRGB", value=True, default=True,
@@ -174,6 +175,11 @@ class CorridorKeyBox(pybox.BaseClass):
                 "Despeckle", value=False, default=False,
                 row=3, col=0, page=0,
                 tooltip="Remove isolated alpha specks (off by default)",
+            ),
+            pybox.create_toggle_button(
+                "Quantized", value=False, default=False,
+                row=4, col=0, page=0,
+                tooltip="Use int8 quantized weights (half the file size, slightly faster, minimal quality loss). Requires .int8.npz weights file.",
             ),
             pybox.create_toggle_button(
                 "Reprocess", value=False, default=False,
@@ -195,7 +201,7 @@ class CorridorKeyBox(pybox.BaseClass):
         # Weights changed — restart daemon with new path
         weights_changed = False
         for el in changes:
-            if el.get("name") == "Weights":
+            if el.get("name") in ("Weights", "Quantized"):
                 weights_changed = True
                 break
 
@@ -205,11 +211,14 @@ class CorridorKeyBox(pybox.BaseClass):
             except Exception:
                 new_weights = DEFAULT_WEIGHTS
             _kill_daemon()
-            # Clear spawned breadcrumb so lazy init re-triggers
             for f in (PARAMS_FILE + ".spawned", READY):
                 try: os.unlink(f)
                 except OSError: pass
-            _spawn_daemon(new_weights)
+            try:
+                quantized = bool(self.get_global_element_value("Quantized"))
+            except Exception:
+                quantized = False
+            _spawn_daemon(new_weights, quantized=quantized)
             return  # Non-blocking — model loads async, next frame will pick it up
 
         # UI-only change — skip inference unless Reprocess toggled
@@ -226,7 +235,11 @@ class CorridorKeyBox(pybox.BaseClass):
                     weights = self.get_global_element_value("Weights") or DEFAULT_WEIGHTS
                 except Exception:
                     weights = DEFAULT_WEIGHTS
-                _spawn_daemon(weights)
+                try:
+                    quantized = bool(self.get_global_element_value("Quantized"))
+                except Exception:
+                    quantized = False
+                _spawn_daemon(weights, quantized=quantized)
                 open(PARAMS_FILE + ".spawned", "w").close()
 
             # Block briefly (up to 30s) so the user sees a loading notice.
@@ -249,7 +262,7 @@ class CorridorKeyBox(pybox.BaseClass):
 
         params = {
             "frame":            self.get_frame(),
-            "despill_strength": float(self.get_global_element_value("Despill Strength")),
+            "despill_strength": float(self.get_global_element_value("Despill")),
             "input_is_srgb":    bool(self.get_global_element_value("Input is sRGB")),
             "despeckle":        bool(self.get_global_element_value("Despeckle")),
         }

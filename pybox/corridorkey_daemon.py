@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--ready",     required=True)
     ap.add_argument("--done",      required=True)
     ap.add_argument("--error",     required=True)
+    ap.add_argument("--quantized", action="store_true", default=False,
+                    help="Dequantize int8 weights on load")
     args = ap.parse_args()
 
     weights_path = Path(args.weights).expanduser().resolve()
@@ -62,10 +64,32 @@ def main():
     # ------------------------------------------------------------------
     print(f"[daemon] Loading GreenFormer from {weights_path} …", flush=True)
     model = GreenFormer()
-    weights = mx.load(str(weights_path))
-    # Strip metadata keys injected by convert.py (not model parameters)
-    _META = {"__src_path__", "__src_sha256__"}
-    model.load_weights([(k, v) for k, v in weights.items() if k not in _META])
+    raw = {k: v for k, v in dict(mx.load(str(weights_path))).items()
+           if not k.startswith("__")}
+
+    if args.quantized:
+        # Dequantize int8 weights: quantize.py stores
+        #   foo.weight  (int8)  + foo.weight_scale (float32 [out_ch])
+        # Reconstruct fp32: w_fp32 = w_int8.astype(float32) * scale
+        scale_keys = {k for k in raw if k.endswith("_scale")}
+        weights = {}
+        for k, v in raw.items():
+            if k in scale_keys:
+                continue  # consumed alongside its weight
+            sk = k + "_scale"
+            if sk in raw:
+                w = v.astype(mx.float32)
+                s = raw[sk]
+                for _ in range(w.ndim - 1):
+                    s = s[..., None]
+                weights[k] = w * s
+            else:
+                weights[k] = v
+        print(f"[daemon] Dequantized {len(scale_keys)} int8 weight tensors", flush=True)
+    else:
+        weights = raw
+
+    model.load_weights(list(weights.items()))
     mx.eval(model.parameters())
     print("[daemon] Model ready", flush=True)
 
