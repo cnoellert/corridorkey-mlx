@@ -114,7 +114,7 @@ class CorridorKeyBox(pybox.BaseClass):
         self.set_state_id("execute")
 
     def execute(self):
-        changes   = self.get_render_element_changes()
+        changes   = self.get_ui_changes()
         reprocess = self.get_render_element_value("Reprocess")
 
         weights_changed = any(el.get("name") in ("Weights", "Quantized") for el in changes)
