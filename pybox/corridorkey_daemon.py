@@ -120,15 +120,11 @@ def main():
             # Write FG first (Flame reads Result0 socket)
             _write_exr(out_fg, fg, compression=LOSSLESS)
 
-            # Write alpha matte as single-channel EXR with channel name 'A'
-            # (_write_exr maps 1-channel to 'Y' which Flame ignores — write manually)
-            import OpenEXR as _exr, Imath as _imath
-            H_a, W_a = alpha.shape
-            _hdr = _exr.Header(W_a, H_a)
-            _hdr['channels'] = {'A': _imath.Channel(_imath.PixelType(_imath.PixelType.FLOAT))}
-            _f = _exr.OutputFile(str(out_alpha), _hdr)
-            _f.writePixels({'A': alpha.tobytes()})
-            _f.close()
+            # Write alpha matte as 3-channel RGB EXR (R=G=B=alpha).
+            # Flame's OutMatte socket expects a standard image-format matte,
+            # not a single-channel 'A' or 'Y' EXR.
+            alpha_rgb = np.stack([alpha, alpha, alpha], axis=-1)  # [H, W, 3] contiguous
+            _write_exr(out_alpha, alpha_rgb, compression=LOSSLESS)
 
             mx.clear_cache()
             print(f"[daemon] Frame {frame} done", flush=True)
