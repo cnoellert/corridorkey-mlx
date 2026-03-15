@@ -1,5 +1,5 @@
 from __future__ import print_function
-import json, os, sys, time
+import json, os, subprocess, sys, time
 import pybox_v1 as pybox
 
 PYBOX_DIR     = "/opt/corridorkey/pybox"
@@ -24,7 +24,14 @@ def _cleanup_sentinels():
         try: os.unlink(f)
         except OSError: pass
 
+def _daemon_running():
+    import subprocess
+    result = subprocess.run(["pgrep", "-f", DAEMON_SCRIPT], capture_output=True)
+    return result.returncode == 0
+
 def _spawn_daemon(weights_path, quantized=False):
+    if _daemon_running():
+        return   # already running, don't spawn a second
     _cleanup_sentinels()
     cmd = (
         "source ~/.zprofile 2>/dev/null; "
