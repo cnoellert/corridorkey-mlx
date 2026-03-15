@@ -129,6 +129,7 @@ class CorridorKeyBox(pybox.BaseClass):
             except: quantized = False
             _kill_daemon()
             for f in (PARAMS_FILE + ".spawned", PARAMS_FILE + ".last_frame",
+                      PARAMS_FILE + ".last_params",
                       READY, TRIGGER, OUT_FG, OUT_ALPHA):
                 try: os.unlink(f)
                 except OSError: pass
@@ -138,20 +139,36 @@ class CorridorKeyBox(pybox.BaseClass):
         # Run on first connect, frame change, or param change.
         current_frame   = self.get_frame()
         last_frame_file = PARAMS_FILE + ".last_frame"
+        last_params_file = PARAMS_FILE + ".last_params"
         try:    last_frame = int(open(last_frame_file).read().strip())
         except: last_frame = None
 
-        frame_changed = (last_frame != current_frame)
-        first_run     = not os.path.exists(OUT_FG)
+        # Build current param snapshot for comparison
+        try:
+            cur_params = "%.4f|%.1f|%s" % (
+                float(self.get_render_element_value("Despill")),
+                float(self.get_render_element_value("Despeckle")),
+                str(bool(self.get_render_element_value("Add sRGB Gamma"))),
+            )
+        except:
+            cur_params = ""
+        try:    last_params = open(last_params_file).read().strip()
+        except: last_params = None
 
-        if not first_run and not frame_changed and not changes:
+        frame_changed  = (last_frame != current_frame)
+        params_changed = (last_params != cur_params)
+        first_run      = not os.path.exists(OUT_FG)
+
+        if not first_run and not frame_changed and not params_changed:
             return
 
-        # Skip if daemon is still busy
+        # Skip if daemon is still busy -- will retry next execute() call
         if os.path.exists(TRIGGER):
             return
 
-        open(last_frame_file, "w").write(str(current_frame))
+        # Record state AFTER we know daemon is free and we're about to send
+        open(last_frame_file,  "w").write(str(current_frame))
+        open(last_params_file, "w").write(cur_params)
 
         if not os.path.exists(READY):
             if not os.path.exists(PARAMS_FILE + ".spawned"):
