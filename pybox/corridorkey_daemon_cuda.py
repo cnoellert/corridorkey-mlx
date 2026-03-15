@@ -113,8 +113,13 @@ def main():
     )
     if device.type in ("cuda", "mps"):
         engine = OptimizedEngine(engine)
-    # Cast to float16 on CUDA to halve VRAM usage (~12GB vs ~24GB)
     if device.type == "cuda":
+        # Enable memory-efficient attention (Flash Attention) -- reduces
+        # O(N^2) attention memory to O(N). Critical at 2048px resolution.
+        import torch.backends.cuda as cuda_backends
+        cuda_backends.enable_flash_sdp(True)
+        cuda_backends.enable_mem_efficient_sdp(True)
+        cuda_backends.enable_math_sdp(False)
         engine.model = engine.model.half()
 
     print(f"[daemon] Model ready on {device}", flush=True)
