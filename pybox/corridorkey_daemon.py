@@ -26,7 +26,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 
 import mlx.core as mx
 from model import GreenFormer
-from test_frame import infer_frame, _read_exr_rgb, _read_exr_mask, _write_exr
+from test_frame import infer_frame, _read_exr_rgb, _read_exr_mask, _write_exr, _srgb_to_linear
 
 LOSSLESS     = {"compression": None, "dwaCompressionLevel": None}
 POLL_INTERVAL = 0.1   # seconds between trigger polls
@@ -129,12 +129,19 @@ def main():
             H, W       = rgb_linear.shape[:2]
             mask       = _read_exr_mask(in_matte, H, W)
 
-            despeckle_val = params.get("despeckle", 0.0)
+            despeckle_val  = params.get("despeckle", 0.0)
+            add_srgb_gamma = params.get("add_srgb_gamma", False)
+
+            # add_srgb_gamma=True  → input is linear; encode to sRGB before model,
+            #                        decode FG back to linear after inference.
+            # add_srgb_gamma=False → input is already sRGB; pass through as-is.
+            # infer_frame's input_is_srgb means "don't encode — it's already sRGB",
+            # so it is the logical inverse of add_srgb_gamma.
             result, fg_straight, _ = infer_frame(
                 model,
                 rgb_linear,
                 mask,
-                input_is_srgb    = params.get("input_is_srgb",    True),
+                input_is_srgb    = not add_srgb_gamma,
                 despill_strength = params.get("despill_strength",  1.0),
                 despeckle        = despeckle_val > 0.0,
                 despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
@@ -142,6 +149,11 @@ def main():
 
             alpha = np.ascontiguousarray(result[:, :, 3], dtype=np.float32)  # [H, W] contiguous
             fg    = fg_straight.astype(np.float32)         # [H, W, 4]
+
+            # Decode FG back to scene-linear if we encoded on the way in.
+            # Alpha is always linear (model output is 0-1 matte).
+            if add_srgb_gamma:
+                fg[:, :, :3] = _srgb_to_linear(fg[:, :, :3])
 
             # Write FG first (Flame reads Result0 socket)
             _write_exr(out_fg, fg, compression=LOSSLESS)
