@@ -183,27 +183,16 @@ def main():
 
             result = None
             try:
-                for _attempt in range(2):
-                    try:
-                        with torch.no_grad():
-                            result = engine.process_frame_tensor(
-                                img_t, mask_t,
-                                input_is_linear  = add_srgb_gamma,
-                                despill_strength = float(despill),
-                                auto_despeckle   = despeckle_val > 0.0,
-                                despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
-                            )
-                        break  # success
-                    except torch.cuda.OutOfMemoryError:
-                        if _attempt == 0:
-                            print(f"[daemon] OOM -- consolidating and retrying...", flush=True)
-                            torch.cuda.synchronize()
-                            torch.cuda.empty_cache()
-                            time.sleep(0.2)
-                        else:
-                            raise
+                with torch.no_grad():
+                    result = engine.process_frame_tensor(
+                        img_t, mask_t,
+                        input_is_linear  = add_srgb_gamma,
+                        despill_strength = float(despill),
+                        auto_despeckle   = despeckle_val > 0.0,
+                        despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
+                    )
             finally:
-                # ALWAYS move model back to CPU -- even on OOM or any other error.
+                # ALWAYS move model back to CPU -- even on error.
                 # Without this the model stays on GPU permanently.
                 if device.type == "cuda":
                     engine.model         = engine.model.to(cpu_device)
