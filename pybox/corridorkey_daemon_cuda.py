@@ -166,13 +166,16 @@ def main():
             mask_t = torch.from_numpy(mask[..., 0])
 
             # Move model to GPU just for this frame, back to CPU after.
-            # Frees VRAM between frames so Flame can use it.
+            # Flush any residual VRAM from previous frame BEFORE moving model
+            # to GPU -- prevents accumulation across frames.
             if device.type == "cuda":
-                engine.model        = engine.model.to(device)
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                engine.model         = engine.model.to(device)
                 engine._engine.model = engine.model
-                engine.device       = device
-                engine._mean        = engine._mean.to(device)
-                engine._std         = engine._std.to(device)
+                engine.device        = device
+                engine._mean         = engine._mean.to(device)
+                engine._std          = engine._std.to(device)
 
             result = None
             try:
