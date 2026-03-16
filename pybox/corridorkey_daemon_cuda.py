@@ -182,40 +182,35 @@ def main():
                 engine._std          = engine._std.to(device)
 
             result = None
-            for _attempt in range(2):
-              try:
-                # add_srgb_gamma=True: input is linear, encode to sRGB before model
-                with torch.no_grad():
-                    result = engine.process_frame_tensor(
-                        img_t, mask_t,
-                        input_is_linear  = add_srgb_gamma,
-                        despill_strength = float(despill),
-                        auto_despeckle   = despeckle_val > 0.0,
-                        despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
-                    )
-                break  # success
-              except torch.cuda.OutOfMemoryError:
-                if _attempt == 0:
-                    print(f"[daemon] OOM on attempt 1 -- consolidating and retrying...", flush=True)
-                    torch.cuda.synchronize()
-                    torch.cuda.empty_cache()
-                    time.sleep(0.2)  # let allocator consolidate
-                else:
-                    raise
             try:
-                pass  # placeholder so finally block attaches correctly
+                for _attempt in range(2):
+                    try:
+                        with torch.no_grad():
+                            result = engine.process_frame_tensor(
+                                img_t, mask_t,
+                                input_is_linear  = add_srgb_gamma,
+                                despill_strength = float(despill),
+                                auto_despeckle   = despeckle_val > 0.0,
+                                despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
+                            )
+                        break  # success
+                    except torch.cuda.OutOfMemoryError:
+                        if _attempt == 0:
+                            print(f"[daemon] OOM -- consolidating and retrying...", flush=True)
+                            torch.cuda.synchronize()
+                            torch.cuda.empty_cache()
+                            time.sleep(0.2)
+                        else:
+                            raise
             finally:
-                # Always move model back to CPU and aggressively clear VRAM,
-                # even if inference failed -- prevents accumulation over frames.
+                # ALWAYS move model back to CPU -- even on OOM or any other error.
+                # Without this the model stays on GPU permanently.
                 if device.type == "cuda":
-                    engine.model        = engine.model.to(cpu_device)
+                    engine.model         = engine.model.to(cpu_device)
                     engine._engine.model = engine.model
-                    engine.device       = cpu_device
-                    engine._mean        = engine._mean.to(cpu_device)
-                    engine._std         = engine._std.to(cpu_device)
-                    # Force full release: empty_cache alone doesn't flush
-                    # activations. Explicitly delete any lingering CUDA tensors
-                    # then synchronize before returning to Flame.
+                    engine.device        = cpu_device
+                    engine._mean         = engine._mean.to(cpu_device)
+                    engine._std          = engine._std.to(cpu_device)
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
 
