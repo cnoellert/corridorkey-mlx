@@ -110,13 +110,19 @@ def main():
         except OSError:
             pass
 
-        # Debounce: wait briefly for any subsequent triggers (frame scrubbing
-        # fires a trigger per frame). Consume all pending triggers and read
-        # the latest params -- only process the most recent frame.
-        time.sleep(0.15)
-        while os.path.exists(trigger):
-            try: os.unlink(trigger)
-            except OSError: pass
+        # Debounce: wait until no new trigger has arrived for 300ms.
+        # Unlinking trigger creates a window where a new one can appear;
+        # the naive sleep+drain loop gets stuck if Flame scrubs faster
+        # than the sleep interval. This "idle for N ms" approach correctly
+        # waits for scrubbing to settle regardless of scrub speed.
+        _last_trigger = time.time()
+        while True:
+            if os.path.exists(trigger):
+                try: os.unlink(trigger)
+                except OSError: pass
+                _last_trigger = time.time()
+            elif time.time() - _last_trigger > 0.3:
+                break
             time.sleep(0.05)
 
         # Read params
