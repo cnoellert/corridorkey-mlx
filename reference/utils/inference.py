@@ -49,9 +49,8 @@ class OptimizedEngine:
             _IMAGENET_STD, device=self.device, dtype=torch.float32
         ).view(1, 3, 1, 1)
 
-        # channels_last only on MPS (Metal's native NHWC layout).
-        # On CUDA it causes non-contiguous attention tensors -> math SDP fallback.
-        if self.device.type == "mps":
+        # channels_last: Metal's native NHWC layout gives ~10-20% speedup
+        if self.device.type in ("mps", "cuda"):
             try:
                 self.model = self.model.to(memory_format=torch.channels_last)
                 print(f"[CorridorKey] channels_last memory format enabled on {self.device}")
@@ -98,16 +97,9 @@ class OptimizedEngine:
         img_norm = (img_r - self._mean) / self._std       # [1, 3, S, S]
         inp = torch.cat([img_norm, msk_r], dim=1)         # [1, 4, S, S]
 
-        # channels_last only on MPS (Metal's native layout).
-        # On CUDA, channels_last propagates non-contiguous tensors through
-        # the model which prevents Flash/mem_efficient attention from being
-        # selected -- forcing O(N^2) math SDP which needs 8GB at 2048px.
-        if device.type == "mps":
+        if device.type in ("mps", "cuda"):
             inp = inp.to(memory_format=torch.channels_last)
 
-        # Cast to float16 on CUDA so SDP selects flash/mem_efficient kernels.
-        if device.type == "cuda":
-            inp = inp.contiguous().to(dtype=torch.float16)
 
         # Forward pass — nullcontext on MPS (float32), autocast on CUDA
         handle = None
