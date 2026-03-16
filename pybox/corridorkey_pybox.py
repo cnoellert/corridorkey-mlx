@@ -25,8 +25,7 @@ FRAME_TIMEOUT = 30
 POLL_INTERVAL = 0.2
 
 def _cleanup_sentinels():
-    INFERRING = PARAMS_FILE + ".inferring"
-    for f in (TRIGGER, READY, DONE, ERROR, INFERRING):
+    for f in (TRIGGER, READY, DONE, ERROR):
         try: os.unlink(f)
         except OSError: pass
 
@@ -174,12 +173,6 @@ class CorridorKeyBox(pybox.BaseClass):
         if os.path.exists(TRIGGER):
             return
 
-        # Skip if daemon is mid-inference (trigger consumed but DONE not yet written)
-        # Prevents double-inference when Flame switches output socket view
-        INFERRING = PARAMS_FILE + ".inferring"
-        if os.path.exists(INFERRING):
-            return
-
         # Record state AFTER we know daemon is free and we're about to send
         open(last_frame_file,  "w").write(str(current_frame))
         open(last_params_file, "w").write(cur_params)
@@ -211,13 +204,9 @@ class CorridorKeyBox(pybox.BaseClass):
             "despeckle":        float(self.get_render_element_value("Despeckle")),
         }
         try:
-            open(INFERRING, "w").close()
             _send_frame(params)
         except Exception as e:
             self.set_error_msg(f"CorridorKey: {e}")
-        finally:
-            try: os.unlink(INFERRING)
-            except OSError: pass
 
     def teardown(self):
         try:
