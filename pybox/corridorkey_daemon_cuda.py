@@ -100,6 +100,10 @@ def main():
     error     = args.error
 
     # Load model
+    # Reduce fragmentation -- large contiguous allocations (attention) fail
+    # when free memory is fragmented even if total free > required.
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+
     device = get_device()
     print(f"[daemon] Loading CorridorKey on {device} from {args.weights} ...", flush=True)
 
@@ -178,7 +182,8 @@ def main():
                 engine._std          = engine._std.to(device)
 
             result = None
-            try:
+            for _attempt in range(2):
+              try:
                 # add_srgb_gamma=True: input is linear, encode to sRGB before model
                 with torch.no_grad():
                     result = engine.process_frame_tensor(
@@ -188,6 +193,16 @@ def main():
                         auto_despeckle   = despeckle_val > 0.0,
                         despeckle_size   = int(despeckle_val) if despeckle_val > 0.0 else 400,
                     )
+                break  # success
+              except torch.cuda.OutOfMemoryError:
+                if _attempt == 0:
+                    print(f"[daemon] OOM on attempt 1 -- clearing cache and retrying...", flush=True)
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                else:
+                    raise
+            try:
+                pass  # placeholder so finally block attaches correctly
             finally:
                 # Always move model back to CPU and aggressively clear VRAM,
                 # even if inference failed -- prevents accumulation over frames.
