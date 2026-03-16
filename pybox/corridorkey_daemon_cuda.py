@@ -102,7 +102,7 @@ def main():
     # Load model
     # Reduce fragmentation -- large contiguous allocations (attention) fail
     # when free memory is fragmented even if total free > required.
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     device = get_device()
     print(f"[daemon] Loading CorridorKey on {device} from {args.weights} ...", flush=True)
@@ -196,9 +196,10 @@ def main():
                 break  # success
               except torch.cuda.OutOfMemoryError:
                 if _attempt == 0:
-                    print(f"[daemon] OOM on attempt 1 -- clearing cache and retrying...", flush=True)
+                    print(f"[daemon] OOM on attempt 1 -- consolidating and retrying...", flush=True)
                     torch.cuda.synchronize()
                     torch.cuda.empty_cache()
+                    time.sleep(0.2)  # let allocator consolidate
                 else:
                     raise
             try:
