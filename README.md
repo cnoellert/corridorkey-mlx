@@ -69,11 +69,11 @@ To start fresh on any machine:
 
 ```bash
 sudo rm -rf /opt/corridorkey
-cd /path/to/corridorkey-flame   # wherever you cloned the repo
+git pull   # make sure you have the latest
 bash install.sh
 ```
 
-> The installer sets ownership to the current user so subsequent `git pull` and `bash install.sh` don't need sudo.
+> The clone can live anywhere — `/opt/corridorkey` is the install target, not the repo location. The installer sets ownership to the current user so subsequent runs don't need sudo.
 
 ---
 
