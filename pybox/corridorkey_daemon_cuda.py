@@ -146,20 +146,9 @@ def main():
             continue
 
         os.unlink(trigger)
-
-        # Debounce: wait until no new trigger has arrived for 300ms.
-        # Unlinking trigger creates a window where a new one can appear;
-        # the naive sleep+drain loop gets stuck if Flame scrubs faster
-        # than the sleep interval. This "idle for N ms" approach correctly
-        # waits for scrubbing to settle regardless of scrub speed.
-        _last_trigger = time.time()
-        while True:
-            if os.path.exists(trigger):
-                os.unlink(trigger)
-                _last_trigger = time.time()
-            elif time.time() - _last_trigger > 0.3:
-                break
-            time.sleep(0.05)
+        os.unlink(trigger)
+        # No debounce needed -- handler only writes trigger if none pending.
+        # params always has the latest frame by the time we get here.
 
         try:
             params = json.loads(open(params_f).read())
