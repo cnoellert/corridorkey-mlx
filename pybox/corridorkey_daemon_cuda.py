@@ -82,6 +82,7 @@ def _write_exr(path, img, compression=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights",   required=True)
+    ap.add_argument("--quantized", action="store_true", default=False)
     ap.add_argument("--in-plate",  required=True)
     ap.add_argument("--in-matte",  required=True)
     ap.add_argument("--out-fg",    required=True)
@@ -125,6 +126,9 @@ def main():
         engine = OptimizedEngine(engine)
     if device.type == "cuda":
         engine.model = engine.model.half()
+    if args.quantized:
+        # Quantized weights are MLX-only for now -- CUDA uses float16 model.half() above.
+        print("[daemon] --quantized ignored on CUDA (not yet implemented) -- using float16", flush=True)
         # Prefer memory-efficient attention (O(N) memory vs O(N^2) for Hiera at 2048px).
         # Keep math_sdp=True as fallback so we never hit "no available kernel".
         import torch.backends.cuda as _cuda_backends
