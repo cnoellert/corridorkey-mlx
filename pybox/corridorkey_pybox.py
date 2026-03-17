@@ -58,12 +58,21 @@ def _cleanup_sentinels():
         except OSError: pass
 
 
+def _parse_img_size(popup_value):
+    """
+    Convert the Img Size popup index (int) to an integer pixel size.
+    Popup items: 0 = "2048 (Full Quality)", 1 = "1024 (Fast / Low VRAM)"
+    Returns 2048 as default for any unrecognised value (Mac, error, etc.)
+    """
+    return {0: 2048, 1: 1024}.get(int(popup_value) if popup_value is not None else 0, 2048)
+
+
 def _daemon_running():
     result = subprocess.run(["pgrep", "-f", DAEMON_SCRIPT], capture_output=True)
     return result.returncode == 0
 
 
-def _spawn_daemon(weights_path, quantized=False):
+def _spawn_daemon(weights_path, quantized=False, img_size=2048):
     """Spawn the background inference daemon if not already running."""
     if _daemon_running():
         return
@@ -77,6 +86,7 @@ def _spawn_daemon(weights_path, quantized=False):
         f"python3 {DAEMON_SCRIPT} "
         f"  {'--quantized' if quantized else ''} "
         f"  --weights '{weights_path}' "
+        f"  --img-size {img_size} "
         f"  --in-plate {IN_PLATE} --in-matte {IN_MATTE} "
         f"  --out-fg {OUT_FG} --out-alpha {OUT_ALPHA} "
         f"  --params {PARAMS_FILE} --trigger {TRIGGER} "
@@ -152,6 +162,14 @@ class CorridorKeyBox(pybox.BaseClass):
                 row=2, col=0, page=0,
                 tooltip="Use int8 quantized weights (faster, smaller, minimal quality loss). Mac/MLX only.",
             )] if _IS_MACOS else []),
+            # Img Size is CUDA-only — Mac has unified memory so 2048 is always fine
+            *([ pybox.create_popup(
+                "Img Size",
+                items=["2048 (Full Quality)", "1024 (Fast / Low VRAM)"],
+                value=0,
+                row=2, col=0, page=0,
+                tooltip="Inference resolution. 1024 uses ~4x less VRAM and is ~3x faster, with some quality loss on fine detail.",
+            )] if not _IS_MACOS else []),
             pybox.create_toggle_button(
                 "Add sRGB Gamma", value=False, default=False,
                 row=0, col=0, page=1,
@@ -179,14 +197,16 @@ class CorridorKeyBox(pybox.BaseClass):
     def execute(self):
         # Handle weights/quantized changes regardless of render state
         changes = self.get_ui_changes()
-        weights_changed = any(el.get("name") in ("Weights", "Quantized") for el in changes)
+        weights_changed = any(el.get("name") in ("Weights", "Quantized", "Img Size") for el in changes)
         if weights_changed:
             try:    new_weights = self.get_render_element_value("Weights") or DEFAULT_WEIGHTS
             except: new_weights = DEFAULT_WEIGHTS
             try:    quantized = bool(self.get_render_element_value("Quantized"))
             except: quantized = False
+            try:    img_size = _parse_img_size(self.get_render_element_value("Img Size"))
+            except: img_size = 2048
             _kill_daemon()
-            _spawn_daemon(new_weights, quantized=quantized)
+            _spawn_daemon(new_weights, quantized=quantized, img_size=img_size)
             return
 
         # THE CRITICAL GATE — do not remove or move inference code above this.
@@ -203,8 +223,10 @@ class CorridorKeyBox(pybox.BaseClass):
             except: weights = DEFAULT_WEIGHTS
             try:    quantized = bool(self.get_render_element_value("Quantized"))
             except: quantized = False
+            try:    img_size = _parse_img_size(self.get_render_element_value("Img Size"))
+            except: img_size = 2048
             if not _daemon_running():
-                _spawn_daemon(weights, quantized=quantized)
+                _spawn_daemon(weights, quantized=quantized, img_size=img_size)
             self.set_notice_msg("CorridorKey: loading model…")
             deadline = time.time() + 60
             while time.time() < deadline:

@@ -83,6 +83,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights",   required=True)
     ap.add_argument("--quantized", action="store_true", default=False)
+    ap.add_argument("--img-size",  type=int, default=2048,
+                    help="Inference resolution (default 2048; use 1024 for low VRAM)")
     ap.add_argument("--in-plate",  required=True)
     ap.add_argument("--in-matte",  required=True)
     ap.add_argument("--out-fg",    required=True)
@@ -119,9 +121,10 @@ def main():
     engine = CorridorKeyEngine(
         checkpoint_path=args.weights,
         device=str(cpu_device),
-        img_size=2048,
+        img_size=args.img_size,
         use_refiner=True,
     )
+    print(f"[daemon] img_size={args.img_size}", flush=True)
     if device.type in ("cuda", "mps"):
         engine = OptimizedEngine(engine)
     if device.type == "cuda":
