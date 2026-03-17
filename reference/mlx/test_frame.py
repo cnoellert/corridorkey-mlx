@@ -362,7 +362,7 @@ def main():
     print(f"[test] Compression: {compression['compression']}  "
           f"dwaLevel={compression.get('dwaCompressionLevel')}")
     H, W = rgb_linear.shape[:2]
-    print(f"[test] Frame: {W}×{H}  (will process at {MODEL_SIZE}px, upsample back)")
+    print(f"[test] Frame: {W}×{H}  (will process at {img_size}px, upsample back)")
 
     # Read garbage matte
     mask = None
