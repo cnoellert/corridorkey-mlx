@@ -1,121 +1,83 @@
 # CorridorKey Flame PyBox — Session Passoff
-**Date:** 2026-03-16  
-**Repo:** `git@github.com:cnoellert/corridorkey-flame.git`  
-**Last commit:** `a205197`
+**Date:** 2026-03-16 (updated — frame scrubbing SOLVED)
+**Repo:** `git@github.com:cnoellert/corridorkey-flame.git`
+
+---
+
+## Status: Frame Scrubbing SOLVED
+
+The scrubbing flood is fixed. The root cause and full architecture are
+documented in `docs/PYBOX_ARCHITECTURE.md`. Read that before touching any
+PyBox code.
+
+**The fix in one line:**
+```python
+if not self.is_processing():
+    return
+```
+
+`is_processing()` is a `pybox_v1` API method that returns `True` only when
+Flame has committed to rendering a frame and is actively waiting for output EXRs.
+During scrubbing, timeline navigation, and UI ticks it is `False`. We simply
+return immediately in those cases and block (via `_send_frame()`) only when
+Flame is actually waiting.
+
+**Source of this discovery:** `BLG.py` from FilmLight's BLG-for-Flame product.
+Their `execute()` uses the identical guard followed by a 45-second blocking
+HTTP request. It has never had a scrubbing problem.
 
 ---
 
 ## What Works
 
-- **Mac (MLX daemon):** Single frame result works. Matte output works. Frame scrubbing is BROKEN (see below).
-- **Linux/Rocky (CUDA daemon):** Single frame result works. VRAM/OOM is stable. Frame scrubbing is BROKEN (same issue).
+- **Mac (MLX daemon):** Single frame ✅. Frame scrubbing ✅ (fixed this session).
+- **Linux/Rocky (CUDA daemon):** Single frame ✅. Frame scrubbing ✅ (fixed this session).
 - Model loads, runs inference, writes EXRs correctly on both platforms.
-- CPU offload on CUDA works — model returns to CPU between frames, VRAM clears.
-- `--quantized` flag accepted on both platforms (no-op on CUDA, functional on MLX).
+- CPU offload on CUDA works — model on CPU between frames, VRAM clears.
+- `--quantized` flag: functional on MLX, accepted/ignored on CUDA.
+- Atomic EXR writes (`.tmp` → `rename`) prevent partial-file reads.
 
 ---
 
-## The Unsolved Problem: Frame Scrubbing
+## What Changed This Session
 
-### Symptom
-Changing frames floods the Flame shell with:
-```
-Unable to open file '/tmp/corridorkey_out_fg.exr': No such file or directory
-Node "pybox1" must have output Result0
-(repeats until schematic view)
-```
-Frame never draws. Must switch to schematic, change frame, then switch back to result.
+### `pybox/corridorkey_pybox.py` — full rewrite
 
-### Root Cause (understood)
-Flame calls `execute()` on every frame it passes through during scrubbing.  
-The PyBox uses an async IPC pattern (fire trigger, daemon processes, return EXR).  
-This creates a fundamental conflict:
+The previous async trigger-fire approach was replaced with:
+1. `if not self.is_processing(): return` guard at top of execute() 
+2. `_send_frame()` blocking call (already existed, now actually used)
+3. Removed: `done_frame` sentinel, `last_frame`/`last_params` file tracking,
+   stale-EXR deletion logic, async trigger fire, `results_valid` check.
+   None of that is needed when `is_processing()` gates everything.
 
-- **If `execute()` blocks** waiting for inference (~3s on Mac): Flame aborts the PyBox process ("PYBOX process aborted"). Flame has a hard timeout on `execute()`.
-- **If `execute()` returns immediately** (async): Flame tries to read the EXR before it exists, errors, retries, and floods the shell. The EXR on disk may belong to the wrong frame.
+The module docstring in `corridorkey_pybox.py` explains the architecture.
+`docs/PYBOX_ARCHITECTURE.md` has the full story including the failed history.
 
-### What Was Tried (all failed)
-1. **Debounce in daemon** — daemon waits N ms after trigger before processing. Broken because handler keeps writing triggers faster than the debounce window.
-2. **Idle-for-300ms debounce** — wait until no trigger for 300ms. Same race condition — daemon unlinks trigger, handler writes new one in the gap.
-3. **INFERRING lockfile** — block handler from writing new triggers while daemon is busy. Broke first-frame render entirely.
-4. **done_frame sentinel** — daemon writes which frame it processed, handler checks if EXR is valid for current frame. Helped stale result issue but didn't fix flooding.
-5. **Delete EXRs before firing trigger** — so Flame errors cleanly on current call and retries. Still floods because Flame retries faster than inference completes.
-6. **Always block in execute()** — worked conceptually but Flame's timeout killed it.
+### `docs/PYBOX_ARCHITECTURE.md` — new file
 
-### What Needs Investigation
-The question is: **how do other PyBoxes with slow operations handle this?**
-
-Options to investigate:
-1. **`set_notice_msg()` as a stall** — some PyBoxes return a notice/warning and Flame stops retrying until user interaction. Investigate if there's a way to tell Flame "not ready yet, stop retrying."
-2. **Return a placeholder EXR** — write a 1x1 black EXR immediately so Flame has *something* to read. Handler returns, Flame draws black, daemon finishes and overwrites with real result. Flame may or may not re-read.
-3. **Flame PyBox API research** — check if there's a `set_busy()`, `request_update()`, or similar API call that signals Flame to wait and retry on its own schedule rather than hammering execute().
-4. **Check the Wiretap PyBox** — Chris wrote ComfyUI-WiretapBrowser nodes. How does that handle async results?
-5. **Single-frame-only mode** — disable scrubbing support entirely (document it), only process on explicit Result button click.
+Comprehensive architecture document covering:
+- How Flame calls `execute()` and what `is_processing()` means
+- The BLG reference and how we found the answer
+- Full system diagram (handler → IPC → daemon)
+- All critical rules with explanations
+- Failed approaches and why they failed (do not re-try)
+- Reinstall and debugging commands
+- Known backlog
 
 ---
 
-## Current Code State
+## Critical Rules — Do Not Violate
 
-### Handler: `pybox/corridorkey_pybox.py`
-- Spawns daemon on first use, kills/respawns on weights or quantized change
-- `execute()` fires trigger async (no blocking), returns immediately
-- Checks `done_frame` sentinel to validate EXR belongs to current frame
-- `_send_frame()` (blocking) exists but causes Flame timeout if used directly
+(Full explanations in `docs/PYBOX_ARCHITECTURE.md`)
 
-### CUDA Daemon: `pybox/corridorkey_daemon_cuda.py`
-- `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` set at module level (before torch import)
-- Model loads to CPU, moves to CUDA for inference, returns to CPU in `try/finally`
-- `try/finally` wraps inference — CPU offload is guaranteed even on error
-- No retry loop (caused kernel panic previously)
-- `--quantized` accepted, ignored (no CUDA quantized weights exist)
-
-### MLX Daemon: `pybox/corridorkey_daemon_mlx.py`  
-- Functional int8 dequantization on load when `--quantized`
-- Same IPC contract as CUDA daemon
-
-### Reference: `reference/utils/inference.py`
-- Restored to original working state (530e607)
-- `channels_last` on both MPS and CUDA (original, working)
-- No float16 input cast (original)
-- Do NOT modify this file again without careful testing
-
----
-
-## Critical Bugs Fixed This Session (do not re-introduce)
-
-### 1. `try/finally` must wrap the actual inference call
-```python
-# WRONG -- finally never runs on exception
-for attempt in range(2):
-    try: result = engine.process_frame_tensor(...)
-    except OOM: retry()
-try: pass
-finally: engine.model.to(cpu)  # ← NEVER RUNS if inference raised
-
-# CORRECT
-try:
-    result = engine.process_frame_tensor(...)
-finally:
-    engine.model.to(cpu)  # ← ALWAYS RUNS
-```
-
-### 2. No OOM retry loops
-Retrying on CUDA OOM while model state is uncertain causes kernel panic and hard system crash.
-
-### 3. PYTORCH_CUDA_ALLOC_CONF must be set before torch import
-Setting it inside main() after `import torch` has no effect — CUDA allocator is frozen at first import.
-
-### 4. max_split_size_mb causes spikes on every frame
-Prevents large contiguous allocations. Do not add this.
-
-### 5. --quantized must be declared in CUDA daemon argparse
-Undeclared args cause silent SystemExit on daemon spawn.
-
-### 6. pkill is async — wait after kill
-After `_kill_daemon()`, wait 0.5s and clean sentinels before spawning replacement.
-
-### 7. Do not modify reference/utils/inference.py
-All channels_last and float16 cast changes to inference.py made things worse, not better. The original code handles this correctly via autocast.
+1. **`is_processing()` guard must stay** at top of execute() — do not remove
+2. **`try/finally` must wrap CUDA inference** — CPU offload must always run
+3. **No OOM retry loops on CUDA** — causes kernel panic / hard system crash
+4. **`PYTORCH_CUDA_ALLOC_CONF` before `import torch`** — top of daemon file
+5. **Do not add `max_split_size_mb`** — causes per-frame VRAM spikes
+6. **Wait 0.5 s after `pkill` before spawning** — pkill is async
+7. **Do not modify `reference/utils/inference.py`** — restored to 530e607, leave it
+8. **`--quantized` must be in CUDA argparse** — undeclared args cause silent exit
 
 ---
 
@@ -127,7 +89,8 @@ cd ~/Documents/GitHub/corridorkey-flame
 git pull
 make -C pybox install
 pkill -f corridorkey_daemon_mlx
-rm -f /tmp/corridorkey_params.json.* /tmp/corridorkey_ready /tmp/corridorkey_error
+rm -f /tmp/corridorkey_*.json* /tmp/corridorkey_ready /tmp/corridorkey_trigger \
+       /tmp/corridorkey_done /tmp/corridorkey_error
 ```
 
 **Rocky Linux:**
@@ -135,12 +98,13 @@ rm -f /tmp/corridorkey_params.json.* /tmp/corridorkey_ready /tmp/corridorkey_err
 cd /opt/corridorkey-flame
 git pull
 make -C pybox install
-make -C pybox install-ref   # only needed if reference/utils/ changed
+make -C pybox install-ref   # only if reference/utils/ changed
 pkill -f corridorkey_daemon_cuda
-rm -f /tmp/corridorkey_params.json.* /tmp/corridorkey_ready /tmp/corridorkey_error
+rm -f /tmp/corridorkey_*.json* /tmp/corridorkey_ready /tmp/corridorkey_trigger \
+       /tmp/corridorkey_done /tmp/corridorkey_error
 ```
 
-**Clean reinstall (either platform):**
+**Clean reinstall:**
 ```bash
 sudo rm -rf /opt/corridorkey
 bash install.sh
@@ -148,18 +112,9 @@ bash install.sh
 
 ---
 
-## Install Layout
-```
-/opt/corridorkey/
-├── models/
-│   ├── CorridorKey_v1.0.mlx.npz   (Mac)
-│   └── CorridorKey_v1.0.pth        (Linux)
-├── mlx/                             (Mac only)
-├── reference/                       (Linux only)
-│   ├── CorridorKeyModule/
-│   └── utils/
-└── pybox/
-    ├── corridorkey_pybox.py
-    ├── corridorkey_daemon_mlx.py
-    └── corridorkey_daemon_cuda.py
-```
+## Known Backlog
+
+- **ONNX export of GreenFormer** — eliminate daemon/IPC entirely.
+  PyTorch `.pth` → ONNX → in-process inference.
+  ~1 day estimate. Key risk: Hiera windowed attention tracing.
+  See `docs/PYBOX_ARCHITECTURE.md` for details.

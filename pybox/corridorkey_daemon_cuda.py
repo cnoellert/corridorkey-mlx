@@ -145,8 +145,12 @@ def main():
             time.sleep(POLL_INTERVAL)
             continue
 
-        os.unlink(trigger)
-        os.unlink(trigger)
+        # Consume trigger — wrap in try/except: handler's _cleanup_sentinels()
+        # can race and delete it between our os.path.exists() check and here.
+        try:
+            os.unlink(trigger)
+        except OSError:
+            pass
         # No debounce needed -- handler only writes trigger if none pending.
         # params always has the latest frame by the time we get here.
 

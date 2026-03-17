@@ -109,7 +109,6 @@ def main():
             os.unlink(trigger)
         except OSError:
             pass
-        os.unlink(trigger)
         # No debounce needed -- handler only writes trigger if none pending.
         # params always has the latest frame by the time we get here.
 
