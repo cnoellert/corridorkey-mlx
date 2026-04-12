@@ -37,6 +37,27 @@ else
 fi
 
 # ── Conda ──────────────────────────────────────────────────────────────────
+# conda may not be on PATH in non-interactive shells. Try common locations.
+if ! command -v conda &>/dev/null; then
+    for _conda_prefix in \
+        "$HOME/miniconda3" \
+        "$HOME/anaconda3" \
+        "$HOME/miniforge3" \
+        "$HOME/mambaforge" \
+        /opt/conda \
+        /opt/miniconda3 \
+        /opt/anaconda3 \
+        /usr/local/miniconda3 \
+        /usr/local/anaconda3; do
+        if [[ -f "$_conda_prefix/etc/profile.d/conda.sh" ]]; then
+            info "Found conda at $_conda_prefix (not on PATH — sourcing)"
+            # shellcheck disable=SC1091
+            source "$_conda_prefix/etc/profile.d/conda.sh"
+            break
+        fi
+    done
+fi
+
 if ! command -v conda &>/dev/null; then
     echo ""
     echo -e "${RED}[corridorkey] ERROR${NC} conda not found."
