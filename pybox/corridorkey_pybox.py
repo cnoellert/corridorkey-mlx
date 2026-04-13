@@ -206,7 +206,7 @@ class CorridorKeyBox(pybox.BaseClass):
             pybox.create_popup(
                 "Img Size",
                 items=["2048 (Full Quality)", "1024 (Fast)"],
-                value=0,
+                value=0 if _IS_MACOS else 1,
                 row=3, col=0, page=0,
                 tooltip="Inference resolution. 1024 is ~3x faster with some quality loss on fine detail.",
             ),
