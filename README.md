@@ -112,7 +112,7 @@ The installer skips steps that are already complete (existing conda env, existin
 **Model page**
 - `Weights` — path to model weights file
 - `Quantized` — enable quantized inference (macOS only, reduces memory)
-- `Img Size` — inference resolution: `2048 (Full Quality)` or `1024 (Fast)`. 1024 is ~3x faster with minimal quality loss on clean commercial GS work. Changing this respawns the daemon (~10s reload).
+- `Img Size` — inference resolution: `2048 (Full Quality)` or `1024 (Fast)`. Defaults to 1024 on Linux (Flame reserves most GPU VRAM) and 2048 on macOS (unified memory). 1024 is ~3x faster with minimal quality loss on clean commercial GS work. Changing this respawns the daemon (~10s reload).
 
 **Settings page**
 - `Add sRGB Gamma` — enable if input is scene-linear (converts to sRGB before inference, back to linear after)
