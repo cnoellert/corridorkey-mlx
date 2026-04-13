@@ -84,15 +84,41 @@ def _daemon_running():
     return result.returncode == 0
 
 
+def _find_conda_sh():
+    """Locate conda.sh across common install prefixes."""
+    candidates = [
+        os.path.expanduser("~/miniconda3"),
+        os.path.expanduser("~/anaconda3"),
+        os.path.expanduser("~/miniforge3"),
+        os.path.expanduser("~/mambaforge"),
+        "/opt/conda",
+        "/opt/miniconda3",
+        "/opt/anaconda3",
+        "/usr/local/miniconda3",
+        "/usr/local/anaconda3",
+    ]
+    for prefix in candidates:
+        path = os.path.join(prefix, "etc/profile.d/conda.sh")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def _spawn_daemon(weights_path, quantized=False, img_size=2048):
     """Spawn the background inference daemon if not already running."""
     if _daemon_running():
         return
     _cleanup_sentinels()
+
+    conda_sh = _find_conda_sh()
+    if conda_sh is None:
+        raise RuntimeError("Cannot find conda.sh — is conda installed?")
+
     env_vars = "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True " if not _IS_MACOS else ""
+    shell = "zsh" if _IS_MACOS else "bash"
     cmd = (
         "source ~/.zprofile 2>/dev/null; "
-        "source ~/miniconda3/etc/profile.d/conda.sh; "
+        f"source '{conda_sh}'; "
         f"conda activate {CONDA_ENV}; "
         f"{env_vars}"
         f"python3 {DAEMON_SCRIPT} "
@@ -105,7 +131,7 @@ def _spawn_daemon(weights_path, quantized=False, img_size=2048):
         f"  --ready {READY} --done {DONE} --error {ERROR} "
         f"  >> /tmp/corridorkey_daemon.log 2>&1 &"
     )
-    os.system(f"zsh -c '{cmd}'")
+    os.system(f"{shell} -c '{cmd}'")
 
 
 def _kill_daemon():
